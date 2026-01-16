@@ -1,0 +1,37 @@
+# Core ML
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# TTS Frameworks (pick one to start)
+# MeloTTS - good Japanese support, lightweight
+# git+https://github.com/myshell-ai/MeloTTS.git
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+scipy>=1.11.0
+numpy>=1.24.0
+
+# Japanese text processing
+pyopenjtalk>=0.3.0
+fugashi>=1.3.0
+unidic-lite>=1.0.8
+jaconv>=0.3.0
+
+# Data handling
+datasets>=2.14.0
+pandas>=2.0.0
+tqdm>=4.65.0
+
+# Forced alignment
+# montreal-forced-aligner  # Install separately via conda
+
+# API/Deployment
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# Dev tools
+jupyter>=1.0.0
+tensorboard>=2.14.0
+matplotlib>=3.7.0

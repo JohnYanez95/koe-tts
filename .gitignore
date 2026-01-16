@@ -1,0 +1,56 @@
+# Data (large files - keep in .gitignore, document sources instead)
+data/raw/
+data/processed/
+data/cache/
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Models (large files)
+models/checkpoints/
+models/exported/
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs and temp
+logs/
+*.log
+.tensorboard/
+runs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Private (personal notes, local scripts, not for public repo)
+private/
