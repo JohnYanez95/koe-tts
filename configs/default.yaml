@@ -1,0 +1,61 @@
+# Japanese TTS Training Configuration
+
+# Data settings
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  cache_dir: "data/cache"
+
+  # Audio processing
+  sample_rate: 22050
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  n_mels: 80
+
+  # Preprocessing
+  normalize_audio: true
+  trim_silence: true
+  target_db: -20.0
+  max_audio_length: 12.0  # seconds - clip longer samples
+
+  # Dataset split
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+# Training settings
+training:
+  batch_size: 8  # Adjust based on VRAM (3090 can handle 8-12)
+  epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.01
+
+  # Memory optimization for 24GB VRAM
+  mixed_precision: true
+  gradient_checkpointing: true
+  gradient_accumulation_steps: 4  # Effective batch = 8 * 4 = 32
+
+  # Checkpointing
+  save_every_n_epochs: 5
+  keep_n_checkpoints: 3
+
+# Model settings
+model:
+  # Options: "melotts", "xtts", "vits"
+  architecture: "melotts"
+
+  # For fine-tuning
+  pretrained_checkpoint: null  # Path to pretrained model
+  freeze_encoder_epochs: 10    # Freeze encoder for first N epochs
+
+# Inference settings
+inference:
+  device: "cuda"
+  use_streaming: false
+
+# Paths
+paths:
+  checkpoints: "models/checkpoints"
+  exported: "models/exported"
+  logs: "logs"
