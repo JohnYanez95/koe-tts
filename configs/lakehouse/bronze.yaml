@@ -1,0 +1,48 @@
+# Bronze Layer Configuration
+# Raw data ingestion with minimal transformation, full provenance
+
+tables:
+  utterances:
+    description: "One row per audio utterance - raw facts + provenance"
+    partition_by: [dataset]  # Single partition to avoid small file proliferation
+    schema:
+      # Primary keys
+      utterance_id: string         # Hash PK: sha1("{dataset}|{speaker_id}|{subset}|{corpus_utt_id}")[:16]
+      utterance_key: string        # Human-readable: {dataset}_{subset}_{corpus_utt_id}
+
+      # Source identification
+      dataset: string              # jsut, jvs, common_voice
+      speaker_id: string           # Speaker identifier
+      speaker_name: string         # Human name if available (nullable)
+      subset: string               # Dataset subset (basic5000, parallel100, etc.)
+      corpus_utt_id: string        # Original corpus ID (nullable)
+
+      # Audio info
+      audio_relpath: string        # Relative path from data/ (stable across mounts)
+      audio_format: string         # wav, flac, mp3
+      sample_rate: int
+      channels: int
+      duration_sec: float
+
+      # Text
+      text_raw: string             # Original transcript
+      text_norm_raw: string        # Corpus-provided normalization (nullable)
+
+      # Phonemes
+      phonemes_source: string      # ground_truth|corpus_provided|generated|none|unknown
+      phonemes_raw: string         # Raw phoneme string (nullable)
+
+      # Provenance
+      ingest_version: string       # Pipeline version
+      source_version: string       # Corpus version (v1.1, etc.) (nullable)
+      source_url: string           # Download URL (nullable)
+      source_archive_checksum: string  # SHA256 of original archive (nullable)
+      audio_checksum: string       # SHA256 of extracted audio (nullable)
+      ingested_at: timestamp
+
+      # Overflow
+      meta: map<string, string>    # Corpus-specific metadata (nullable)
+
+write_mode: merge  # Upsert on utterance_id
+optimize_zorder: [dataset, speaker_id]
+vacuum_retention_hours: 168  # 7 days

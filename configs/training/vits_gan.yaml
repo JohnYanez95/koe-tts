@@ -1,0 +1,168 @@
+# VITS GAN Training Config (Stage 4.1)
+# Adds MPD/MSD discriminators after core stabilizes.
+# Start from a vits_core checkpoint for best results.
+
+run:
+  name: vits_gan
+  seed: 42
+  device: cuda
+  amp: true
+
+data:
+  dataset: jsut
+  snapshot_id: null
+  batch_size: 3              # Reduced for full-utterance training (no segment crop)
+  num_workers: 4
+  pin_memory: true
+  max_train_batches: null
+  max_val_batches: 50
+  # Segment cropping disabled - causes phoneme/audio misalignment without forced alignment
+  # TODO: Implement length-based bucket sampling to keep batches homogeneous
+  segment_seconds: null      # Train on full utterances (requires more GPU memory)
+  max_audio_len: 220500      # 10 seconds @ 22050 Hz - keeps 90% of data, prevents OOM
+  # Multi-speaker: balance speakers in each batch (auto-enabled if num_speakers > 1)
+  speaker_balanced: null     # null = auto, true = always, false = never
+
+mel:
+  sample_rate: 22050
+  n_mels: 80
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  f_min: 0
+  f_max: 8000
+
+model:
+  # Latent space
+  latent_dim: 192
+
+  # Text encoder (transformer)
+  text_d_model: 192
+  text_n_layers: 6
+  text_n_heads: 2
+  text_d_ff: 768
+  text_dropout: 0.1
+
+  # Posterior encoder (WaveNet)
+  posterior_hidden: 192
+  posterior_kernel: 5
+  posterior_n_layers: 16
+  posterior_dilation_rate: 2
+
+  # Flow (residual coupling)
+  flow_hidden: 192
+  flow_kernel: 5
+  flow_n_layers: 4
+  flow_n_flows: 4
+  flow_dilation_rate: 2
+
+  # Duration predictor
+  dur_hidden: 256
+  dur_kernel: 3
+  dur_n_layers: 2
+  dur_dropout: 0.5
+
+  # Generator (HiFiGAN)
+  gen_upsample_rates: [8, 8, 2, 2]
+  gen_upsample_kernel_sizes: [16, 16, 4, 4]
+  gen_upsample_initial_channel: 512
+  gen_resblock_kernel_sizes: [3, 7, 11]
+  gen_resblock_dilations: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+
+# Discriminator config
+discriminator:
+  enabled: true
+  use_mpd: true
+  use_msd: true
+  mpd_periods: [2, 3, 5, 7, 11]
+  disc_start_step: 10000      # Train core-only until this step
+  loss_type: hinge            # hinge | lsgan
+
+# Loss weights
+loss:
+  mel_weight: 45.0            # High to keep mel quality
+  kl_weight: 1.0
+  dur_weight: 1.0
+  adv_weight: 0.5             # Original value
+  fm_weight: 2.0              # Feature matching loss
+
+# KL annealing (prevents posterior collapse)
+kl_anneal:
+  enabled: true
+  start_weight: 0.0
+  end_weight: 1.0
+  steps: 20000
+
+# Separate optimizers for G and D
+optim:
+  lr_g: 2.0e-4                # Original value
+  lr_d: 5.0e-5                # Reduced from 1e-4 to slow D and prevent domination
+  betas: [0.8, 0.99]
+  weight_decay: 0.0           # Usually 0 for GAN
+  grad_clip_g: 50.0           # Only clip true explosions, let healthy grads pass
+  grad_clip_d: 0.5            # Tight clipping to prevent D from dominating G
+
+train:
+  max_steps: 200000
+  log_every_steps: 100
+  val_every_steps: 2000
+  save_every_steps: 5000
+
+# GAN controller tuning (calibrated from baseline 2026-01-29)
+# EXPERIMENT 2026-02-01: Observation mode - disable all interventions, only log events
+# Hypothesis: High gradients during D separation are productive learning, not explosions
+# AMP scaler handles NaN/Inf by skipping steps automatically
+controller:
+  # OBSERVATION MODE: Log events but don't intervene
+  escalation_enabled: false      # Disable escalation ladder (L0→L1→L2→L3→emergency)
+  hard_ceiling_enabled: false    # Disable hard ceiling emergency stop
+
+  adv_ramp_steps: 5000
+  # Disable escalation-based clipping (1.0 = no clip reduction at any level)
+  grad_clip_scales: [1.0, 1.0, 1.0]
+  # Disable LR scaling at L2+ (1.0 = no reduction)
+  lr_scale_factor: 1.0
+  # Hard ceiling (emergency stop, true last resort only)
+  absolute_grad_limit_g: 10000
+  absolute_grad_limit_d: 10000
+  # Consecutive spikes (3 in a row)
+  consecutive_spikes_for_unstable: 3
+  # Spike density (bursty patterns)
+  spike_density_window: 20
+  spike_density_threshold: 5    # Loosened from 3 (was too sensitive)
+  # EMA early warning
+  ema_elevated_limit_g: 500
+  ema_elevated_limit_d: 500
+  ema_elevated_steps_threshold: 100  # Loosened from 50
+  # Clip coefficient (baseline: normal g_clip_coef is 0.03-0.07)
+  clip_coef_hard_threshold: 0.01     # Only trigger if well below normal
+  clip_coef_hard_steps: 50           # Require sustained clipping
+  clip_coef_median_threshold: 0.02   # Only trigger if median very low
+  clip_coef_median_window: 100       # Longer window for median
+  # De-escalation thresholds (exponential: L1 fast, L3 slow)
+  stability_required_steps_l1: 200   # Level 1: fast recovery
+  stability_required_steps_l2: 500   # Level 2: medium recovery
+  stability_required_steps_l3: 1000  # Level 3: slow/conservative recovery
+
+  # Soft gates (block de-escalation while EMA grads remain elevated)
+  soft_grad_limit_g: 400              # Raised from 200 (too tight for G variance)
+  soft_grad_limit_d: 200
+
+  # D-real velocity tracking (replaces threshold-based triggers)
+  # Philosophy: D improving (d_real rising) is GOOD, but too fast destabilizes G.
+  # We scale LR based on velocity for smooth ascent, not sudden jumps.
+  d_real_velocity_window: 20          # Steps to calculate velocity over
+  d_real_velocity_warning: 0.01       # Velocity above this → reduce LR to 0.7x
+  d_real_velocity_critical: 0.02      # Velocity above this → reduce LR to 0.5x
+  d_real_velocity_emergency: 0.05     # Velocity above this → reduce LR to 0.25x
+  d_real_velocity_lr_min: 0.1         # Floor to prevent complete stall
+
+  # Freeze D only at L3 (L2 uses reduced LR + tighter clipping but D still learns)
+  d_freeze_start_level: 3
+  d_unfreeze_warmup_steps: 50
+  # Probes: allow D weight updates during probe windows
+  # Set to true for forward-only (safer but D can't recover)
+  d_freeze_probe_forward_only: false
+  # Probe frequency and duration (D gets ~40% training time during freeze)
+  d_freeze_probe_interval: 50    # was 100
+  d_freeze_probe_duration: 20    # was 10

@@ -1,0 +1,44 @@
+# Common Voice Japanese Configuration
+# Mozilla Common Voice - crowdsourced speech corpus
+# https://commonvoice.mozilla.org/
+
+name: common_voice
+version: cv-corpus-15.0-2023-09-08
+language: ja
+
+source:
+  url: https://commonvoice.mozilla.org/
+  requires_manual_download: true  # Must accept license on website
+  archive: cv-corpus-15.0-2023-09-08-ja.tar.gz
+
+speakers:
+  count: 5000+  # Variable, crowdsourced
+  id_pattern: client_id  # Hash-based client IDs
+
+splits:
+  train:
+    validated: true
+  dev:
+    validated: true
+  test:
+    validated: true
+  other:
+    validated: false  # Unvalidated recordings
+
+audio:
+  sample_rate: 48000  # Original sample rate
+  target_sample_rate: 22050  # For training
+  format: mp3  # Original format
+  target_format: wav  # Convert for training
+  channels: mono
+
+text:
+  encoding: utf-8
+  has_furigana: false
+  has_phonemes: false  # Need to generate
+
+quality_filters:
+  min_votes: 2  # Minimum upvotes
+  max_votes_down: 0  # No downvotes
+  min_duration_sec: 1.0
+  max_duration_sec: 15.0

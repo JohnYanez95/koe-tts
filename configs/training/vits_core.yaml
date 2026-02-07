@@ -1,0 +1,86 @@
+# VITS Core Training Config (Stage 4.0)
+# No discriminator - validates MAS alignment + latent modeling + waveform gen.
+# Enable GAN training with vits_gan.yaml after this stabilizes.
+
+run:
+  name: vits_core
+  seed: 42
+  device: cuda
+  amp: true
+
+data:
+  dataset: jsut
+  snapshot_id: null
+  batch_size: 16             # Use 8 for multi-speaker to avoid OOM
+  num_workers: 4
+  pin_memory: true
+  max_train_batches: null
+  max_val_batches: 50
+  # Segment cropping disabled - causes phoneme/audio misalignment without forced alignment
+  # TODO: Implement length-based bucket sampling to keep batches homogeneous
+  segment_seconds: null      # Train on full utterances (requires more GPU memory)
+  # Multi-speaker: balance speakers in each batch (auto-enabled if num_speakers > 1)
+  speaker_balanced: null     # null = auto, true = always, false = never
+
+mel:
+  sample_rate: 22050
+  n_mels: 80
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  f_min: 0
+  f_max: 8000
+
+model:
+  # Latent space
+  latent_dim: 192
+
+  # Text encoder (transformer)
+  text_d_model: 192
+  text_n_layers: 6
+  text_n_heads: 2
+  text_d_ff: 768
+  text_dropout: 0.1
+
+  # Posterior encoder (WaveNet)
+  posterior_hidden: 192
+  posterior_kernel: 5
+  posterior_n_layers: 16
+  posterior_dilation_rate: 2
+
+  # Flow (residual coupling)
+  flow_hidden: 192
+  flow_kernel: 5
+  flow_n_layers: 4
+  flow_n_flows: 4
+  flow_dilation_rate: 2
+
+  # Duration predictor
+  dur_hidden: 256
+  dur_kernel: 3
+  dur_n_layers: 2
+  dur_dropout: 0.5
+
+  # Generator (HiFiGAN)
+  gen_upsample_rates: [8, 8, 2, 2]
+  gen_upsample_kernel_sizes: [16, 16, 4, 4]
+  gen_upsample_initial_channel: 512
+  gen_resblock_kernel_sizes: [3, 7, 11]
+  gen_resblock_dilations: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+
+loss:
+  # Stage 4.0: mel recon + KL + duration (no adversarial)
+  kl_weight: 1.0
+  dur_weight: 1.0
+
+optim:
+  lr: 2.0e-4
+  weight_decay: 1.0e-2
+  betas: [0.8, 0.99]
+  grad_clip: 1.0
+
+train:
+  max_steps: 100000
+  log_every_steps: 100
+  val_every_steps: 2000
+  save_every_steps: 5000

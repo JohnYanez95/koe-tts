@@ -1,0 +1,93 @@
+# VITS Training Configuration
+# Based on Piper-Plus / VITS architecture
+
+model:
+  architecture: vits
+  name: tts-ja-vits
+
+  # Model dimensions
+  hidden_channels: 192
+  inter_channels: 192
+  filter_channels: 768
+  n_heads: 2
+  n_layers: 6
+  kernel_size: 3
+  p_dropout: 0.1
+
+  # Audio config
+  sample_rate: 22050
+  hop_length: 256
+  win_length: 1024
+  n_fft: 1024
+  n_mels: 80
+
+  # Speaker embedding (for multi-speaker)
+  n_speakers: 1  # Set to actual count for multi-speaker
+  speaker_embedding_dim: 256
+
+training:
+  # Batch and accumulation
+  batch_size: 16
+  gradient_accumulation_steps: 4
+  effective_batch_size: 64  # batch_size * accumulation
+
+  # Learning rate
+  learning_rate: 2e-4
+  lr_decay: 0.999875
+  warmup_steps: 0
+
+  # TTUR (Two Time-scale Update Rule)
+  discriminator_lr_ratio: 1.0  # D_lr = G_lr * ratio
+
+  # Epochs and steps
+  max_epochs: 1000
+  validation_interval: 5  # Validate every N epochs
+  checkpoint_interval: 5  # Save every N epochs
+
+  # Mixed precision
+  amp_enabled: true
+  amp_dtype: float16
+
+  # Gradient clipping
+  gradient_clip_val: 1000.0  # VITS uses high clip value
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 50
+    monitor: val_loss
+    mode: min
+
+data:
+  # Gold manifest to use
+  gold_version: latest
+
+  # Caching
+  cache_mode: symlink  # symlink, copy, or none
+  cache_path: null     # Auto from configs/lakehouse/paths.yaml
+
+  # Preprocessing
+  max_audio_length_sec: 15.0
+  min_audio_length_sec: 0.5
+
+  # Augmentation
+  augmentation:
+    enabled: false  # For fine-tuning, usually disabled
+
+output:
+  # Output paths (relative to runs/)
+  run_name: null  # Auto-generated if null
+  checkpoints_dir: checkpoints
+  samples_dir: samples
+  logs_dir: logs
+
+  # Regression samples
+  regression_samples:
+    enabled: true
+    interval: 5  # Generate every N epochs
+    sentences:
+      - "こんにちは、今日はいい天気ですね。"
+      - "東京駅から新宿駅まで電車で行きます。"
+      - "私は毎朝六時に起きて、朝ご飯を食べます。"
+      - "この本はとても面白いと思います。"
+      - "明日の会議は午後三時からです。"

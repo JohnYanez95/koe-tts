@@ -1,0 +1,50 @@
+# Baseline Mel TTS Training Config
+# Teacher-forced mel prediction model for pipeline validation.
+# Not production quality - validates full training stack works.
+
+run:
+  name: baseline_mel
+  seed: 42
+  device: cuda
+  amp: true
+
+data:
+  dataset: jsut
+  snapshot_id: null          # Required via CLI or resolved automatically
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+  max_train_batches: null    # null = full epoch
+  max_val_batches: 50
+  # Memory safety: crop audio to fixed length (null = full utterance)
+  segment_seconds: null      # Set to 3.0 for multi-speaker or long utterances
+  # Multi-speaker: balance speakers in each batch (auto-enabled if num_speakers > 1)
+  speaker_balanced: null     # null = auto, true = always, false = never
+
+mel:
+  sample_rate: 22050
+  n_mels: 80
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  f_min: 0
+  f_max: 8000
+
+model:
+  d_model: 256
+  n_conv_layers_enc: 6
+  n_conv_layers_dec: 4
+  kernel_size: 5
+  dropout: 0.1
+
+optim:
+  lr: 2.0e-4
+  weight_decay: 1.0e-2
+  betas: [0.9, 0.98]
+  grad_clip: 1.0
+
+train:
+  max_steps: 20000
+  log_every_steps: 50
+  val_every_steps: 1000
+  save_every_steps: 1000

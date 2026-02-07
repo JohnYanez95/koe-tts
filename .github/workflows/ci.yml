@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Check linting
+        run: ruff check .
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Install dependencies
+        run: |
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Run pip-audit
+        # Ignored vulnerabilities - see justification below:
+        # - transformers CVEs: Require loading malicious model files from untrusted sources.
+        #   We only load XTTS-v2 from official Coqui TTS and our own trained checkpoints.
+        # - CVE-2025-53000 (nbconvert): Windows-only path injection when converting notebooks
+        #   to PDF. CI runs on Linux and we don't use nbconvert --to pdf.
+        # - CVE-2026-0994 (protobuf): Transitive dependency from ML libraries.
+        #   We don't directly parse untrusted protobuf messages.
+        run: |
+          pip-audit --skip-editable \
+            --ignore-vuln GHSA-cx63-2mw6-8hw5 \
+            --ignore-vuln CVE-2025-1194 \
+            --ignore-vuln CVE-2025-2099 \
+            --ignore-vuln CVE-2025-3262 \
+            --ignore-vuln CVE-2025-3263 \
+            --ignore-vuln CVE-2025-3264 \
+            --ignore-vuln CVE-2025-3777 \
+            --ignore-vuln CVE-2025-3933 \
+            --ignore-vuln CVE-2025-5197 \
+            --ignore-vuln CVE-2025-6638 \
+            --ignore-vuln CVE-2025-6051 \
+            --ignore-vuln CVE-2025-6921 \
+            --ignore-vuln CVE-2025-53000 \
+            --ignore-vuln CVE-2026-0994
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Install dependencies
+        run: |
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Run tests
+        run: pytest -v --ignore=tests/test_gpu.py -m "not gpu"
+        env:
+          COQUI_TOS_AGREED: "1"

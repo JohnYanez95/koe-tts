@@ -1,0 +1,36 @@
+# JSUT Corpus Configuration
+# Single speaker Japanese speech corpus
+# https://sites.google.com/site/shinaboratory/home/jsut
+
+name: jsut
+version: v1.1
+language: ja
+
+source:
+  url: https://sites.google.com/site/shinaboratory/home/jsut
+  archive: jsut_ver1.1.zip
+  md5: null  # TODO: add checksum
+
+speaker:
+  id: jsut001
+  name: JSUT Female
+  gender: female
+
+subsets:
+  - basic5000      # 5,000 utterances
+  - onomatopee300  # 300 onomatopoeia
+  - counters128    # 128 counter expressions
+  - loanword128    # 128 loanwords
+  - travel1000     # 1,000 travel phrases
+  - voiceactress100  # 100 voice actress sentences
+
+audio:
+  sample_rate: 48000  # Original sample rate
+  target_sample_rate: 22050  # For training
+  format: wav
+  channels: mono
+
+text:
+  encoding: utf-8
+  has_furigana: false
+  has_phonemes: false  # Need to generate with pyopenjtalk

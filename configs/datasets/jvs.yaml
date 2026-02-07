@@ -1,0 +1,52 @@
+# JVS Corpus Configuration
+# Japanese Versatile Speech corpus with 100 speakers
+# https://sites.google.com/site/shinaboratory/home/jvs
+
+name: jvs
+version: v1
+language: ja
+
+source:
+  url: https://sites.google.com/site/shinaboratory/home/jvs
+  archive: jvs_ver1.zip
+  md5: null  # TODO: add checksum
+
+speakers:
+  count: 100
+  id_pattern: "jvs{:03d}"  # jvs001 through jvs100
+  gender_distribution:
+    male: 50
+    female: 50
+
+subsets:
+  parallel100:
+    description: "100 parallel sentences read by all speakers"
+    utterances_per_speaker: 100
+    has_phonemes: true  # Ground truth phoneme labels
+  nonpara30:
+    description: "30 non-parallel sentences per speaker"
+    utterances_per_speaker: 30
+    has_phonemes: true
+  whisper10:
+    description: "10 whispered sentences per speaker"
+    utterances_per_speaker: 10
+    has_phonemes: true
+  falset10:
+    description: "10 falsetto sentences per speaker"
+    utterances_per_speaker: 10
+    has_phonemes: true
+
+audio:
+  sample_rate: 24000  # Original sample rate
+  target_sample_rate: 22050  # For training
+  format: wav
+  channels: mono
+
+text:
+  encoding: utf-8
+  has_furigana: false
+  has_phonemes: true  # Ground truth phoneme labels in lab files
+
+phoneme_format:
+  type: julius
+  inventory: "modules/data_engineering/common/schemas/jvs_phonemes.txt"

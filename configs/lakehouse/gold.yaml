@@ -1,0 +1,93 @@
+# Gold Layer Configuration
+# Training-ready manifests, evaluation sets, labeler sampling frames
+
+tables:
+  train_manifest:
+    description: "Main training manifest with splits and sampling weights"
+    source: silver.utterances
+    partition_by: [dataset, split]
+    schema:
+      # Keys (from silver)
+      utterance_id: string
+      utterance_key: string
+
+      # Source identification
+      dataset: string
+      speaker_id: string
+
+      # Training data
+      audio_relpath: string
+      duration_sec: float
+      text: string
+      phonemes: string
+      n_phonemes: int
+
+      # Split assignment
+      split: string              # train, val, test
+      duration_bucket: string    # short, medium, long
+
+      # Sampling (optional)
+      sample_weight: float       # nullable
+
+      # Versioning
+      gold_version: string
+      silver_version: long       # nullable
+      created_at: timestamp
+
+  eval_sets:
+    description: "Fixed evaluation sets for regression testing"
+    schema:
+      eval_set_id: string        # e.g., "edge_cases_v1"
+      utterance_id: string
+      text: string
+      phonemes: string
+      category: string           # long_sentence, rare_phoneme, etc.
+      expected_duration_sec: float  # nullable
+      reference_audio_relpath: string  # nullable
+      notes: string              # nullable
+
+  sampling_frames:
+    description: "Stratified batches for labeler"
+    schema:
+      frame_id: string           # e.g., "low_confidence_batch_001"
+      utterance_id: string
+      stratum: string            # phoneme_rarity, confidence_bin, etc.
+      priority: int              # Lower = higher priority
+      audio_relpath: string
+      text: string
+      current_phonemes: string   # nullable
+      phoneme_confidence: float  # nullable
+      labeled: string            # pending, in_progress, done
+      created_at: timestamp
+
+splits:
+  train: 0.9
+  val: 0.05
+  test: 0.05
+  stratify_by: [dataset, speaker_id]
+  random_seed: 42
+
+duration_buckets:
+  # Bucket boundaries in seconds for length-balanced batching
+  boundaries: [2.0, 4.0, 6.0, 8.0, 10.0, 15.0]
+  labels: ["xs", "s", "m", "l", "xl", "xxl"]
+
+sampling:
+  # Balance across datasets
+  dataset_weights:
+    jsut: 1.0
+    jvs: 1.0
+    common_voice: 0.5  # Lower weight for crowdsourced data
+  # Speaker balancing within dataset
+  speaker_cap_hours: 2.0  # Max hours per speaker
+  min_speaker_utterances: 10  # Min utterances to include speaker
+
+export:
+  formats:
+    - parquet      # For Spark/pandas
+    - jsonl        # For streaming dataloaders
+  include_audio_bytes: false  # Just paths, not embedded audio
+
+write_mode: overwrite  # Full rebuild from silver
+optimize_zorder: [dataset, split, speaker_id]
+vacuum_retention_hours: 168

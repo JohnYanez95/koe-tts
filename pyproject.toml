@@ -1,0 +1,148 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "koe-tts"
+version = "0.2.0"
+description = "Japanese Text-to-Speech training pipeline with Delta Lake"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "John Yanez"}
+]
+keywords = ["tts", "japanese", "speech-synthesis", "delta-lake", "spark"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Data platform
+    # Delta 4.0.x requires Spark 4.0.x - pin to compatible versions
+    "pyspark>=4.0.0,<4.1.0",
+    "delta-spark>=4.0.0,<4.1.0",
+    "deltalake>=0.14.0",  # delta-rs for fast reads without Spark
+    "pyarrow>=14.0.0",
+    "pyyaml>=6.0",
+    "mlflow>=2.10.0",
+
+    # Audio processing
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "pyloudnorm>=0.1.0",
+
+    # Japanese NLP
+    "pyopenjtalk>=0.3.0",
+    "jaconv>=0.3.0",
+
+    # Utilities
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "tqdm>=4.65.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+
+    # Unity Catalog integration
+    "unitycatalog-client==0.3.1",  # Pin to match UC server version
+    "duckdb>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+
+train = [
+    # Training deps - install torch/torchaudio separately with CUDA first:
+    # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    "pytorch-lightning>=2.0.0",
+]
+
+labeler = [
+    "streamlit>=1.30.0",
+    "streamlit-audiorecorder>=0.0.5",
+]
+
+xtts = [
+    # Legacy XTTS support (optional)
+    "TTS>=0.22.0",
+]
+
+dashboard = [
+    # FastAPI backend
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    # SSE for live metrics streaming
+    "sse-starlette>=2.0",
+    # GPU stats via NVML (better than scraping nvidia-smi)
+    "pynvml>=11.5.0",
+    # Host stats
+    "psutil>=5.9",
+]
+
+all = [
+    "koe-tts[dev,labeler,xtts,train,dashboard]",
+]
+
+[project.scripts]
+koe = "scripts.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/JohnYanez95/koe-tts"
+Repository = "https://github.com/JohnYanez95/koe-tts"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modules*", "scripts*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # function calls in argument defaults
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "spark: marks tests requiring Spark",
+    "gpu: marks tests requiring GPU",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

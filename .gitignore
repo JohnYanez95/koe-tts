@@ -1,0 +1,207 @@
+################################################################################
+# Python / general
+################################################################################
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+.Python
+
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.wheels/
+MANIFEST
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.pytype/
+.cache/
+.tox/
+.nox/
+
+# IDEs / editors
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+################################################################################
+# Project: symlinks + large assets (DO NOT COMMIT)
+################################################################################
+# These are symlinks to large storage (NAS / /mnt). Keep the links out of git.
+data
+models
+lake
+
+# If you sometimes use alternative names
+data/
+/models/
+lake/
+
+# But track source code model definitions
+!modules/training/models/
+
+################################################################################
+# Runs / logs / dashboards / artifacts
+################################################################################
+# Track runs/ structure, ignore contents
+runs/**
+!runs/
+!runs/training/
+!runs/labeling/
+!runs/data_engineering/
+!runs/**/.gitkeep
+
+logs/
+**/*.log
+**/*.log.*
+**/dashboard.png
+**/dashboards/
+**/tensorboard/
+.tensorboard/
+**/tb/
+lightning_logs/
+wandb/
+mlruns/                  # MLflow default tracking dir (if used locally)
+outputs/
+
+# Audio samples / exports produced by eval/synthesis
+**/samples/
+**/exports/
+**/synth/
+**/*.wav
+**/*.flac
+**/*.mp3
+**/*.ogg
+
+# Allow tracked wav files in docs (regression samples)
+!legacy/docs/**/*.wav
+
+# Model checkpoints
+*.pt
+*.pth
+*.onnx
+*.bin
+*.ckpt
+*.safetensors
+
+################################################################################
+# Delta Lake / Spark
+################################################################################
+# Delta transaction log + checkpoints
+_delta_log/
+**/_delta_log/
+**/*.crc
+**/_committed_*
+**/_started_*
+**/_SUCCESS
+**/.part-*
+**/part-*.snappy.parquet
+**/part-*.parquet
+**/*.parquet
+
+# Spark local dirs / event logs / metastore
+spark-warehouse/
+metastore_db/
+derby.log
+hive-site.xml
+*.jhist
+*.lck
+*.lock
+*.pid
+*.out
+spark-events/
+eventlog/
+checkpoint/
+checkpoints/
+
+################################################################################
+# Temporary / cache outputs
+################################################################################
+tmp/
+temp/
+*.tmp
+
+# Local training cache snapshots (SSD caches)
+cache/
+caches/
+**/.cache/
+**/cache_snapshot/
+**/cache_snapshots/
+
+################################################################################
+# Notebooks / experimentation
+################################################################################
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+notebooks/
+*.ipynb
+
+################################################################################
+# Legacy: keep code tracked, ignore generated artifacts inside legacy
+################################################################################
+legacy/data-cache/
+legacy/test_sentences/
+legacy/logs/
+legacy/tmp/
+legacy/private/
+legacy/venv/
+legacy/**/runs/
+legacy/**/lightning_logs/
+legacy/**/checkpoints/
+legacy/**/samples/
+
+################################################################################
+# Secrets / credentials (protect yourself)
+################################################################################
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.crt
+credentials.json
+secrets.json
+
+# Unity Catalog secrets & runtime data
+token.txt
+**/token.txt
+hibernate.properties
+!hibernate.properties.example
+pgdata/
+backups/
+**/etc/data/
+
+################################################################################
+# Internal documentation (personal setup notes)
+################################################################################
+docs/internal/
+
+################################################################################
+# Optional: local config overrides (keep examples tracked)
+################################################################################
+configs/local/
+configs/**/local.*

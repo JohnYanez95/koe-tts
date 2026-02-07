@@ -1,0 +1,30 @@
+# Multi-speaker Combined Dataset Configuration
+# Combines JSUT (1 speaker) + JVS (100 speakers) for multi-speaker training
+
+name: multi
+version: v1.0
+language: ja
+
+description: |
+  Combined multi-speaker Japanese TTS dataset.
+  - JSUT: 1 female speaker (spk00), ~10h
+  - JVS: 100 speakers (jvs001-jvs100), ~30h total
+
+sources:
+  - jsut
+  - jvs
+
+# Speaker mapping
+speakers:
+  jsut: spk00          # JSUT single speaker -> spk00
+  jvs: jvs{:03d}       # JVS speakers -> jvs001, jvs002, ..., jvs100
+
+# Total expected
+stats:
+  n_speakers: 101
+  estimated_hours: 40
+
+audio:
+  target_sample_rate: 22050
+  format: wav
+  channels: mono

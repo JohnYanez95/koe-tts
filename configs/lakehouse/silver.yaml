@@ -1,0 +1,79 @@
+# Silver Layer Configuration
+# Cleaned, normalized, QC-passed data
+
+tables:
+  utterances:
+    description: "Cleaned utterances with normalized text, phonemes, and QC metrics"
+    source: bronze.utterances
+    partition_by: [dataset]  # Single partition (same as bronze)
+    schema:
+      # Keys (from bronze)
+      utterance_id: string
+      utterance_key: string
+
+      # Source identification
+      dataset: string
+      speaker_id: string
+      speaker_name: string     # nullable
+      subset: string
+
+      # Audio (normalized)
+      audio_relpath: string
+      duration_sec: float
+      sample_rate: int         # Normalized (22050)
+
+      # Text
+      text: string             # Fully normalized
+      text_raw: string         # Original (for reference)
+
+      # Phonemes
+      phonemes: string         # Final sequence
+      phoneme_source: string   # ground_truth|corpus_provided|generated
+      phoneme_confidence: float  # nullable, model confidence if generated
+      n_phonemes: int
+
+      # QC metrics
+      snr_db: float            # nullable
+      clipping_ratio: float    # nullable
+      silence_ratio: float     # nullable
+      loudness_lufs: float     # nullable
+      qc_passed: boolean
+      qc_flags: array<string>  # nullable
+
+      # Promoted metadata (from bronze.meta)
+      gender: string           # nullable
+      accent: string           # nullable
+      age_group: string        # nullable
+
+      # Lineage
+      processed_at: timestamp
+      bronze_version: long     # nullable, Delta version of source bronze
+      silver_pipeline_version: string
+
+qc_thresholds:
+  min_snr_db: 15.0
+  max_clipping_ratio: 0.01
+  max_silence_ratio: 0.5
+  min_duration_sec: 0.5
+  max_duration_sec: 30.0
+  min_phonemes: 3
+  max_phonemes: 500
+
+normalization:
+  audio:
+    target_sample_rate: 22050
+    target_loudness_lufs: -23.0
+    trim_silence: true
+    trim_threshold_db: -40
+  text:
+    fullwidth_to_halfwidth: true
+    normalize_punctuation: true
+    remove_extra_whitespace: true
+  phonemes:
+    # Map corpus phonemes to unified inventory
+    mapping_file: "docs/phoneme_mapping/jvs_to_unified.csv"
+    fallback_g2p: pyopenjtalk
+
+write_mode: merge  # Upsert on utterance_id
+optimize_zorder: [dataset, speaker_id, qc_passed]
+vacuum_retention_hours: 168
