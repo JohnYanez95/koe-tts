@@ -1,128 +1,125 @@
 # 声 koe-tts
 
-Japanese Text-to-Speech training pipeline with Delta Lake.
+From-scratch Japanese Text-to-Speech engine built on VITS and Delta Lake.
 
 ## Overview
 
-A modular TTS training system built on:
-- **Delta Lake**: Versioned, ACID-compliant data lakehouse
-- **PySpark**: Scalable data processing
-- **PyTorch Lightning**: Training infrastructure
-- **Piper/VITS**: Phoneme-authoritative synthesis
+A complete TTS training system featuring:
+- **VITS synthesis**: End-to-end TTS with variational inference and adversarial training
+- **4-stage training**: baseline (mel) → duration → vits_core → vits_gan
+- **Delta Lake pipeline**: Medallion architecture (Bronze → Silver → Gold)
+- **Training dashboard**: Live metrics, GAN stability monitoring, control plane
+- **Segmentation labeler**: Pause boundary refinement with waveform visualization
 
-## Project Structure
-
-```
-koe-tts/
-├── modules/                  # All Python code (importable packages)
-│   ├── platform/             # Shared Spark/Delta infrastructure
-│   │   ├── paths.py          # Centralized path management
-│   │   ├── spark.py          # Spark session factory
-│   │   └── delta.py          # Delta read/write operations
-│   ├── data_engineering/     # ETL pipelines
-│   │   ├── ingest/           # Download and stage raw data
-│   │   ├── bronze/           # Raw data ingestion
-│   │   ├── silver/           # Cleaned, normalized data
-│   │   └── gold/             # ML-ready features
-│   ├── training/             # Model training code
-│   └── labeler/              # Labeling application
-├── configs/                  # Configuration files
-│   └── paths.yaml            # DATA_ROOT configuration
-├── scripts/                  # CLI entrypoints
-├── tests/                    # Unit and integration tests
-├── docs/                     # Documentation
-├── docker/                   # Docker configurations
-├── legacy/                   # Frozen v1 codebase
-├── Makefile                  # Common commands
-└── pyproject.toml            # Package configuration
-```
-
-## Data Architecture
-
-The lakehouse lives at `$DATA_ROOT` (configurable):
-
-```
-$DATA_ROOT/
-├── data/
-│   ├── raw/                  # Downloaded corpus archives
-│   └── staging/              # Unpacked files before bronze
-├── lake/
-│   ├── bronze/               # Raw data, append-only
-│   ├── silver/               # Cleaned, typed, deduplicated
-│   └── gold/                 # ML-ready features
-├── runs/
-│   └── train/{run_name}/     # Training outputs
-│       ├── checkpoints/
-│       ├── logs/
-│       ├── samples/
-│       └── config.yaml
-└── models/                   # Curated model registry
-```
+Supported corpora: JSUT (single speaker), JVS (100 speakers), Common Voice.
 
 ## Quick Start
 
 ```bash
-# 1. Clone and setup
+# Clone and setup
 git clone https://github.com/JohnYanez95/koe-tts.git
 cd koe-tts
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 2. Configure data root
-export KOE_DATA_ROOT=/path/to/your/data
-# Or edit configs/paths.yaml
+# For training with CUDA
+make train-install-cu124  # or cu121
 
-# 3. Verify setup
+# Configure data paths (optional - defaults to repo root)
+export KOE_DATA_ROOT=/path/to/data
+export KOE_LOCAL_ROOT=/path/to/fast/ssd
+
+# Verify setup
 make test
 ```
 
 ## Usage
 
-```python
-from modules.platform import paths, read_table, write_table, get_spark
-
-# Access paths
-paths.bronze / "jsut"
-paths.train_run("experiment_v1").checkpoints
-
-# Read/write Delta tables
-df = read_table("silver", "utterances")
-write_table(df, "gold", "training_set", mode="overwrite")
-
-# Spark session
-spark = get_spark()
-```
-
-## Development
+### Data Pipeline
 
 ```bash
-# Run tests
-make test
+koe build jsut                    # Full pipeline: ingest → bronze → silver → gold
 
-# Lint and format
-make lint
-make format
-
-# Run specific pipeline
-python -m modules.data_engineering.bronze.jsut
-
-# Monitor training dashboard
-koe monitor --latest
+# Or step by step:
+koe ingest jsut                   # Download + extract corpus
+koe bronze jsut                   # Raw → Delta table
+koe silver jsut                   # QC + phonemes
+koe gold jsut                     # Splits + JSONL manifest
 ```
+
+### Training
+
+```bash
+koe cache create jsut             # Create training cache from gold
+koe train smoke-test jsut         # Verify pipeline works
+
+koe train baseline jsut           # Stage 1: mel prediction
+koe train duration jsut           # Stage 2: duration prediction
+koe train vits jsut --stage core  # Stage 3: VITS reconstruction
+koe train vits jsut --stage gan   # Stage 4: VITS with adversarial training
+```
+
+### Monitoring & Synthesis
+
+```bash
+koe monitor --latest              # Launch training dashboard
+koe synth jsut -r <run_id> --text "こんにちは"
+```
+
+### Segmentation Labeling
+
+```bash
+koe label serve jsut              # Launch labeling UI on localhost:8081
+```
+
+## Project Structure
+
+```
+koe-tts/
+├── modules/
+│   ├── data_engineering/         # ETL with medallion architecture
+│   │   ├── common/               # Paths, Spark, schemas, audio DSP
+│   │   ├── ingest/               # Download + extract (jsut/, jvs/)
+│   │   ├── bronze/               # Raw → Delta
+│   │   ├── silver/               # QC, phonemes, segments
+│   │   └── gold/                 # Training manifests (JSONL)
+│   ├── training/
+│   │   ├── models/               # VITS, baseline, duration models
+│   │   ├── dataloading/          # Dataset, collator, cache management
+│   │   ├── pipelines/            # train_*, eval_*, synthesize
+│   │   └── common/               # Checkpoints, GAN controller, metrics
+│   ├── dashboard/                # FastAPI + React training monitor
+│   └── labeler/                  # Segmentation labeling app
+├── configs/
+│   ├── training/                 # baseline, duration, vits_core, vits_gan
+│   ├── datasets/                 # jsut, jvs, multi
+│   └── lakehouse/                # paths, bronze, silver, gold
+├── scripts/                      # CLI (Typer-based)
+├── docs/
+│   ├── postmortems/              # Training incident reports
+│   └── training/                 # GAN controller reference
+└── tests/
+```
+
+## Data Flow
+
+```
+ingest → bronze (raw Delta) → silver (QC + phonemes) → gold (splits + JSONL) → cache → training
+```
+
+Storage paths derive from `$KOE_DATA_ROOT` (archive) and `$KOE_LOCAL_ROOT` (fast SSD for active training).
+
+## Configuration
+
+- **Training**: `configs/training/{baseline,duration,vits_core,vits_gan}.yaml`
+- **Datasets**: `configs/datasets/{jsut,jvs,multi}.yaml`
+- **Paths**: `configs/lakehouse/paths.yaml`
 
 ## Documentation
 
-- [Postmortems](./docs/postmortems/) — Incident reports for training failures
-
-## Legacy Code
-
-The `legacy/` directory contains the frozen v1/v2 codebase:
-- XTTS-v2 fine-tuning
-- Piper Plus training
-- Original preprocessing scripts
-
-See `legacy/README.md` for documentation.
+- [GAN Controller](./docs/training/GAN_CONTROLLER.md) — Stability monitoring and mitigations
+- [Postmortems](./docs/postmortems/) — Training incident reports and learnings
 
 ## License
 
