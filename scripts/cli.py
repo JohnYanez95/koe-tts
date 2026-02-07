@@ -369,6 +369,116 @@ def catalog_refresh(
 
 
 # =============================================================================
+# Query Commands (DuckDB + Unity Catalog)
+# =============================================================================
+
+query_app = typer.Typer(help="Query Delta tables via DuckDB")
+app.add_typer(query_app, name="query")
+
+
+@query_app.command("sql")
+def query_sql(
+    sql: str = typer.Argument(..., help="SQL query to execute"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, csv"),
+    limit: int = typer.Option(None, "--limit", "-n", help="Limit rows (applied if not in query)"),
+):
+    """
+    Run SQL query against Delta tables.
+
+    Uses DuckDB with delta_scan() for direct access, or Unity Catalog
+    if UC_ENABLED=true.
+
+    Examples:
+        koe query sql "SELECT COUNT(*) FROM delta_scan('/lake/silver/jsut/utterances')"
+        koe query sql "SELECT * FROM koe_tts.silver_jsut.utterances LIMIT 10"
+    """
+    from modules.data_engineering.common.duckdb_client import query
+
+    result = query(sql)
+
+    if limit and len(result) > limit:
+        result = result.head(limit)
+
+    if format == "json":
+        print(result.to_json(orient="records", indent=2))
+    elif format == "csv":
+        print(result.to_csv(index=False))
+    else:
+        print(result.to_string())
+
+
+@query_app.command("tables")
+def query_tables():
+    """
+    List all tables (requires UC_ENABLED=true).
+
+    Without Unity Catalog, use delta_scan() directly or
+    'koe catalog list' for lakehouse discovery.
+    """
+    from modules.data_engineering.common.duckdb_client import list_tables
+
+    result = list_tables()
+    print(result.to_string())
+
+
+@query_app.command("table")
+def query_table(
+    layer: str = typer.Argument(..., help="Layer: bronze, silver, or gold"),
+    dataset: str = typer.Argument(..., help="Dataset name"),
+    table: str = typer.Argument(..., help="Table name"),
+    columns: str = typer.Option("*", "--columns", "-c", help="Column selection"),
+    where: str = typer.Option(None, "--where", "-w", help="WHERE clause"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Row limit"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, csv"),
+):
+    """
+    Query a specific table by layer/dataset/table.
+
+    Examples:
+        koe query table silver jsut utterances
+        koe query table silver jsut utterances --limit 5
+        koe query table silver jsut utterances --columns "id,text,duration_sec"
+        koe query table gold jsut utterances --where "split='train'" --limit 100
+    """
+    from modules.data_engineering.common.duckdb_client import query_table as qt
+
+    result = qt(layer, dataset, table, columns=columns, where=where, limit=limit)
+
+    if format == "json":
+        print(result.to_json(orient="records", indent=2))
+    elif format == "csv":
+        print(result.to_csv(index=False))
+    else:
+        print(result.to_string())
+
+
+@query_app.command("scan")
+def query_scan(
+    path: str = typer.Argument(..., help="Path to Delta table"),
+    columns: str = typer.Option("*", "--columns", "-c", help="Column selection"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Row limit"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, csv"),
+):
+    """
+    Direct delta_scan on a path (bypasses catalog).
+
+    Examples:
+        koe query scan /lake/silver/jsut/utterances
+        koe query scan ./lake/bronze/jvs/utterances --limit 5
+    """
+    from modules.data_engineering.common.duckdb_client import scan_delta
+
+    result = scan_delta(path, columns=columns, limit=limit)
+
+    if format == "json":
+        print(result.to_json(orient="records", indent=2))
+    elif format == "csv":
+        print(result.to_csv(index=False))
+    else:
+        print(result.to_string())
+
+
+# =============================================================================
 # Segmentation Commands
 # =============================================================================
 
@@ -484,7 +594,7 @@ def segment_auto(
         else:
             return " (default)"
 
-    print(f"\nUsing pause config (resolved):")
+    print("\nUsing pause config (resolved):")
     print(f"  min_pause_ms={effective['min_pause_ms']}{fmt_source('min_pause_ms')}")
     print(f"  margin_db={effective['margin_db']}{fmt_source('margin_db')}")
     print(f"  floor_db={effective['floor_db']}{fmt_source('floor_db')}")
@@ -1634,7 +1744,7 @@ def monitor(
         if dataset:
             runs = [r for r in runs if r.dataset == dataset]
         if not runs:
-            print(f"No runs found" + (f" for dataset '{dataset}'" if dataset else ""))
+            print("No runs found" + (f" for dataset '{dataset}'" if dataset else ""))
             raise typer.Exit(1)
 
         run_id = runs[0].run_id
@@ -1652,7 +1762,7 @@ def monitor(
         raise typer.Exit(1)
 
     # Start server
-    print(f"Starting KOE Monitor Dashboard")
+    print("Starting KOE Monitor Dashboard")
     print(f"  Run: {run_id}")
     print(f"  URL: http://{host}:{port}")
     print(f"  API: http://{host}:{port}/api/runs/{run_id}/meta")
