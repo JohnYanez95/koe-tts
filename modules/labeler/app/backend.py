@@ -225,7 +225,7 @@ def create_app() -> FastAPI:
                     name=r.get("name", r["method"]),
                     method=r["method"],
                     processed=r["processed"],
-                    with_breaks=r["with_breaks"],
+                    with_breaks=r.get("with_breaks", 0),
                     elapsed_s=r["elapsed_s"],
                     created_at=r["created_at"],
                 )
