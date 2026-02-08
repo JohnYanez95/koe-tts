@@ -1,125 +1,143 @@
 """
 Spark session management for the koe-tts lakehouse.
 
-Provides a configured SparkSession with Delta Lake support.
-Optionally integrates with Unity Catalog when UC_ENABLED=true.
+Connects to Hive Metastore for table resolution and MinIO for S3 storage.
 
 Usage:
     from modules.data_engineering.common.spark import get_spark
 
     spark = get_spark()
-    df = spark.read.format("delta").load(str(paths.bronze / "utterances"))
 
-    # With UC enabled:
-    df = spark.table("koe_tts.silver_jsut.utterances")
+    # Query by table name (resolved via Hive Metastore)
+    df = spark.table("gold_koe.utterances")
+
+    # Or direct path access
+    df = spark.read.format("delta").load("s3a://forge/lake/gold/koe/utterances")
 """
 
 import os
+import sys
 
 from pyspark.sql import SparkSession
 
-from .paths import paths
 
-# Unity Catalog configuration
-UC_SERVER_URL = os.getenv("UC_SERVER_URL", "http://localhost:8080")
-UC_TOKEN = os.getenv("UC_TOKEN", "")
-UC_ENABLED = os.getenv("UC_ENABLED", "false").lower() == "true"
-CATALOG_NAME = "koe_tts"
+# =============================================================================
+# Configuration from environment
+# =============================================================================
 
-# Global spark session (lazy initialized)
+# Hive Metastore - table name resolution
+METASTORE_URI = os.getenv("METASTORE_URI", "thrift://localhost:9083")
+
+# MinIO/S3 - object storage
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minio")
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "")
+
+# Lake root (S3 path)
+LAKE_ROOT = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
+
+
+# =============================================================================
+# Package versions - all in one place
+# =============================================================================
+
+# Delta + Spark version must match
+# PySpark 4.x requires delta-spark 4.x with Scala 2.13
+PACKAGES = [
+    "io.delta:delta-spark_2.13:4.0.0",
+    "org.apache.hadoop:hadoop-aws:3.3.4",  # S3A filesystem support
+]
+
+
+# =============================================================================
+# Spark session
+# =============================================================================
+
 _spark: SparkSession | None = None
 
 
-def get_spark(
-    app_name: str = "koe-tts",
-    warehouse_dir: str | None = None,
-    local_mode: bool = True,
-    extra_configs: dict | None = None,
-    use_uc: bool | None = None,
-) -> SparkSession:
+def get_spark(app_name: str = "koe-tts") -> SparkSession:
     """
-    Get or create a configured SparkSession with Delta Lake support.
+    Get or create a SparkSession connected to Hive Metastore + MinIO.
 
-    Args:
-        app_name: Spark application name
-        warehouse_dir: Spark warehouse directory. Defaults to lake path.
-        local_mode: If True, use local[*] master. If False, expects
-                    SPARK_MASTER env var or cluster config.
-        extra_configs: Additional Spark configs to set
-        use_uc: Force UC on/off. None = use UC_ENABLED env var.
+    One session per process, cached after first call.
+    The app_name only matters on first call (for Spark UI label).
+
+    Configuration:
+    - Hive Metastore: table name → S3 location resolution
+    - Delta Lake: table format
+    - S3A/MinIO: object storage
 
     Returns:
-        Configured SparkSession with Delta Lake extensions.
-        If UC enabled, includes koe_tts catalog via Unity Catalog.
+        Configured SparkSession
     """
     global _spark
 
     if _spark is not None:
         return _spark
 
-    if warehouse_dir is None:
-        warehouse_dir = str(paths.lake)
-
-    # Delta Lake version must match pyspark version
-    # PySpark 4.x requires delta-spark 4.x with Scala 2.13
-    DELTA_VERSION = "4.0.0"
-    UC_SPARK_VERSION = "0.3.1"
-    SCALA_VERSION = "2.13"
-
-    # Determine if UC should be used
-    should_use_uc = use_uc if use_uc is not None else UC_ENABLED
-
-    # Build jars list
-    jars = [f"io.delta:delta-spark_{SCALA_VERSION}:{DELTA_VERSION}"]
-    if should_use_uc:
-        jars.append(f"io.unitycatalog:unitycatalog-spark_{SCALA_VERSION}:{UC_SPARK_VERSION}")
-
-    # Use the same Python for driver and worker
-    import sys
-    python_path = sys.executable
-
     builder = (
         SparkSession.builder
         .appName(app_name)
-        .config("spark.pyspark.python", python_path)
-        .config("spark.pyspark.driver.python", python_path)
-        .config("spark.sql.warehouse.dir", warehouse_dir)
-        # Delta Lake jars (+ UC if enabled)
-        .config("spark.jars.packages", ",".join(jars))
-        # Delta Lake configs
+
+        # --------------------------------------------------------------------
+        # Python executable - ensure driver and workers use same Python
+        # --------------------------------------------------------------------
+        .config("spark.pyspark.python", sys.executable)
+        .config("spark.pyspark.driver.python", sys.executable)
+
+        # --------------------------------------------------------------------
+        # Hive Metastore - "phone book" for table names
+        # spark.table("gold_koe.utterances") asks HMS: "where is this table?"
+        # HMS replies: "s3a://forge/lake/gold/koe/utterances"
+        # --------------------------------------------------------------------
+        .config("spark.sql.catalogImplementation", "hive")
+        .config("hive.metastore.uris", METASTORE_URI)
+
+        # --------------------------------------------------------------------
+        # Delta Lake - table format
+        # MUST use spark_catalog (Delta's requirement)
+        # --------------------------------------------------------------------
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
             "spark.sql.catalog.spark_catalog",
-            "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
-        # Performance configs for local dev
+
+        # --------------------------------------------------------------------
+        # S3A / MinIO - object storage
+        # Spark reads/writes to s3a://forge/lake/...
+        # --------------------------------------------------------------------
+        .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
+        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
+        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")  # MinIO requires path-style
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")  # localhost, no TLS
+
+        # --------------------------------------------------------------------
+        # Packages - ALL in one string (spark.jars.packages is non-additive)
+        # --------------------------------------------------------------------
+        .config("spark.jars.packages", ",".join(PACKAGES))
+
+        # --------------------------------------------------------------------
+        # Performance - tuned for local dev
+        # --------------------------------------------------------------------
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.default.parallelism", "8")
+
+        # --------------------------------------------------------------------
         # Delta defaults
+        # --------------------------------------------------------------------
         .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
-        .config("spark.databricks.delta.properties.defaults.autoOptimize.optimizeWrite", "true")
+
+        # --------------------------------------------------------------------
+        # Local mode
+        # --------------------------------------------------------------------
+        .master("local[*]")
     )
 
-    # Add Unity Catalog configuration if enabled
-    if should_use_uc:
-        builder = (
-            builder
-            .config(f"spark.sql.catalog.{CATALOG_NAME}", "io.unitycatalog.spark.UCSingleCatalog")
-            .config(f"spark.sql.catalog.{CATALOG_NAME}.uri", UC_SERVER_URL)
-        )
-        if UC_TOKEN:
-            builder = builder.config(f"spark.sql.catalog.{CATALOG_NAME}.token", UC_TOKEN)
-
-    if local_mode:
-        builder = builder.master("local[*]")
-
-    if extra_configs:
-        for key, value in extra_configs.items():
-            builder = builder.config(key, value)
-
     _spark = builder.getOrCreate()
-
-    # Set log level to reduce noise
     _spark.sparkContext.setLogLevel("WARN")
 
     return _spark

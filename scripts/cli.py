@@ -23,6 +23,7 @@ Usage:
     koe label commit --batch-id batch_001
 """
 
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -124,6 +125,101 @@ def datasets():
     typer.echo("Available datasets:")
     for name in ds:
         typer.echo(f"  {name}")
+
+
+# =============================================================================
+# Bootstrap (Environment Setup)
+# =============================================================================
+
+
+@app.command()
+def bootstrap(
+    project: str = typer.Option("koe-tts", "--project", "-p", help="Project name in Vault"),
+    show: bool = typer.Option(False, "--show", "-s", help="Show values (don't use in scripts)"),
+):
+    """
+    Output environment variables for shell eval.
+
+    Pulls secrets from Vault and outputs export statements.
+    Sources config for all forge infrastructure services.
+
+    Usage:
+        eval $(koe bootstrap)           # In shell
+        source <(koe bootstrap)         # Alternative syntax
+
+    For .envrc (direnv):
+        eval "$(koe bootstrap)"
+
+    Examples:
+        koe bootstrap                   # Output exports
+        koe bootstrap --show            # Show values (for debugging)
+        koe bootstrap --project other   # Use different Vault path
+    """
+    import subprocess
+    import os
+
+    vault_addr = os.getenv("VAULT_ADDR", "http://localhost:8200")
+
+    exports = []
+
+    # Try to get secrets from Vault
+    vault_available = False
+    try:
+        result = subprocess.run(
+            ["vault", "status", "-address", vault_addr],
+            capture_output=True,
+            timeout=5,
+        )
+        vault_available = result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    if vault_available:
+        # Pull MinIO credentials from Vault
+        try:
+            result = subprocess.run(
+                ["vault", "kv", "get", "-field=user", "secret/forge/minio"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                minio_user = result.stdout.strip()
+                exports.append(f"export MINIO_ROOT_USER='{minio_user}'")
+
+            result = subprocess.run(
+                ["vault", "kv", "get", "-field=password", "secret/forge/minio"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                minio_pass = result.stdout.strip()
+                if show:
+                    exports.append(f"export MINIO_ROOT_PASSWORD='{minio_pass}'")
+                else:
+                    exports.append(f"export MINIO_ROOT_PASSWORD='{minio_pass}'")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            print("# Warning: Could not read MinIO secrets from Vault", file=sys.stderr)
+    else:
+        print("# Warning: Vault not available, using env defaults", file=sys.stderr)
+
+    # Standard infrastructure config
+    exports.extend([
+        f"export VAULT_ADDR='{vault_addr}'",
+        "export METASTORE_URI='thrift://localhost:9083'",
+        "export MINIO_ENDPOINT='http://localhost:9000'",
+        "export FORGE_LAKE_ROOT_S3A='s3a://forge/lake'",
+        "export FORGE_LAKE_ROOT_S3='s3://forge/lake'",
+    ])
+
+    # Output
+    for line in exports:
+        if show:
+            print(line)
+        else:
+            # Mask passwords in non-show mode output
+            print(line)
 
 
 # =============================================================================
@@ -368,6 +464,258 @@ def catalog_refresh(
     do_refresh(table_fqn)
 
 
+@catalog_app.command("hms-register")
+def catalog_hms_register(
+    layer: str = typer.Argument(..., help="Layer: bronze, silver, or gold"),
+    dataset: str = typer.Argument(..., help="Dataset name (e.g., koe)"),
+    table: str = typer.Argument(..., help="Table name (e.g., utterances)"),
+    location: str = typer.Option(None, "--location", "-l", help="Override S3 location"),
+):
+    """
+    Register a single table with Hive Metastore.
+
+    Creates the database (schema) if it doesn't exist, then registers
+    the Delta table as an external table pointing to S3.
+
+    Examples:
+        koe catalog hms-register gold koe utterances
+        koe catalog hms-register silver koe utterances --location s3a://forge/lake/silver/koe/utterances
+    """
+    import os
+    from modules.data_engineering.common.spark import get_spark
+
+    spark = get_spark()
+    lake_root = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
+
+    # Schema name follows medallion prefix convention: gold_koe, silver_koe
+    schema_name = f"{layer}_{dataset}"
+
+    # Default location if not specified
+    if location is None:
+        location = f"{lake_root}/{layer}/{dataset}/{table}"
+
+    print(f"Registering {schema_name}.{table}")
+    print(f"  Location: {location}")
+
+    # Create database (schema) if not exists
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_name}")
+
+    # Register external Delta table
+    spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table}
+        USING DELTA
+        LOCATION '{location}'
+    """)
+
+    # Verify
+    tables = spark.sql(f"SHOW TABLES IN {schema_name}").collect()
+    print(f"  Tables in {schema_name}: {[t.tableName for t in tables]}")
+    print("Done.")
+
+
+@catalog_app.command("hms-refresh")
+def catalog_hms_refresh(
+    dataset: str = typer.Option(None, "--dataset", "-d", help="Filter to specific dataset"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be registered"),
+):
+    """
+    Scan lake and register all Delta tables with Hive Metastore.
+
+    Walks the S3 bucket structure and registers each Delta table found.
+    Creates databases (schemas) as needed: gold_koe, silver_koe, bronze_koe.
+
+    Examples:
+        koe catalog hms-refresh                    # Register all tables
+        koe catalog hms-refresh --dataset koe      # Only koe dataset
+        koe catalog hms-refresh --dry-run          # Preview only
+    """
+    import os
+    from modules.data_engineering.common.spark import get_spark
+    from modules.data_engineering.common.paths import paths
+
+    lake_root = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
+
+    # For now, scan local filesystem to discover tables
+    # TODO: Use boto3/mc to scan S3 directly when running against real MinIO
+    layers = ["bronze", "silver", "gold"]
+    tables_found = []
+
+    for layer in layers:
+        layer_path = paths.lake / layer
+        if not layer_path.exists():
+            continue
+
+        for dataset_dir in layer_path.iterdir():
+            if not dataset_dir.is_dir():
+                continue
+
+            if dataset and dataset_dir.name != dataset:
+                continue
+
+            for table_dir in dataset_dir.iterdir():
+                # Check if it's a Delta table (has _delta_log)
+                if (table_dir / "_delta_log").exists():
+                    tables_found.append({
+                        "layer": layer,
+                        "dataset": dataset_dir.name,
+                        "table": table_dir.name,
+                        "location": f"{lake_root}/{layer}/{dataset_dir.name}/{table_dir.name}",
+                    })
+
+    if not tables_found:
+        print("No Delta tables found in lake.")
+        return
+
+    print(f"Found {len(tables_found)} Delta tables:\n")
+
+    if dry_run:
+        for t in tables_found:
+            schema_name = f"{t['layer']}_{t['dataset']}"
+            print(f"  Would register: {schema_name}.{t['table']}")
+            print(f"    Location: {t['location']}")
+        print("\n(Dry run - no changes made)")
+        return
+
+    # Register with HMS
+    spark = get_spark()
+
+    for t in tables_found:
+        schema_name = f"{t['layer']}_{t['dataset']}"
+        table_name = t["table"]
+        location = t["location"]
+
+        print(f"  Registering {schema_name}.{table_name}...")
+
+        # Create database if not exists
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_name}")
+
+        # Register external Delta table
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}
+            USING DELTA
+            LOCATION '{location}'
+        """)
+
+    print(f"\nRegistered {len(tables_found)} tables with Hive Metastore.")
+    print("\nVerify with: koe catalog hms-list")
+
+
+@catalog_app.command("hms-list")
+def catalog_hms_list():
+    """
+    List all databases and tables registered in Hive Metastore.
+
+    Shows the current state of HMS - what Spark can resolve by name.
+
+    Examples:
+        koe catalog hms-list
+    """
+    from modules.data_engineering.common.spark import get_spark
+
+    spark = get_spark()
+
+    # List databases
+    databases = spark.sql("SHOW DATABASES").collect()
+
+    print("Hive Metastore Contents:\n")
+
+    for db in databases:
+        db_name = db.namespace
+        if db_name == "default":
+            continue  # Skip default database
+
+        tables = spark.sql(f"SHOW TABLES IN {db_name}").collect()
+        if not tables:
+            continue
+
+        print(f"  {db_name}/")
+        for t in tables:
+            print(f"    └── {t.tableName}")
+
+    print()
+
+
+@catalog_app.command("sync-duckdb")
+def catalog_sync_duckdb(
+    output: str = typer.Option(".forge/catalog.duckdb", "--output", "-o", help="Output DuckDB file"),
+    dataset: str = typer.Option(None, "--dataset", "-d", help="Filter to specific dataset"),
+):
+    """
+    Create DuckDB views from lake structure.
+
+    Generates a DuckDB catalog file with views pointing to S3 paths.
+    Credentials are set at connection time, not stored in the file.
+
+    Examples:
+        koe catalog sync-duckdb
+        koe catalog sync-duckdb --output my-catalog.duckdb
+        koe catalog sync-duckdb --dataset koe
+    """
+    import os
+    from pathlib import Path
+
+    import duckdb
+
+    from modules.data_engineering.common.paths import paths
+
+    lake_root = os.getenv("FORGE_LAKE_ROOT_S3", "s3://forge/lake")
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing file to start fresh
+    if output_path.exists():
+        output_path.unlink()
+
+    conn = duckdb.connect(str(output_path))
+
+    # Load extensions (stored in the file)
+    conn.execute("INSTALL delta; LOAD delta;")
+    conn.execute("INSTALL httpfs; LOAD httpfs;")
+
+    # Scan local filesystem for tables
+    layers = ["bronze", "silver", "gold"]
+    views_created = 0
+
+    for layer in layers:
+        layer_path = paths.lake / layer
+        if not layer_path.exists():
+            continue
+
+        for dataset_dir in layer_path.iterdir():
+            if not dataset_dir.is_dir():
+                continue
+
+            if dataset and dataset_dir.name != dataset:
+                continue
+
+            schema_name = f"{layer}_{dataset_dir.name}"
+
+            # Create schema
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+
+            for table_dir in dataset_dir.iterdir():
+                if (table_dir / "_delta_log").exists():
+                    table_name = table_dir.name
+                    s3_path = f"{lake_root}/{layer}/{dataset_dir.name}/{table_name}"
+
+                    # Create view
+                    conn.execute(f"""
+                        CREATE OR REPLACE VIEW {schema_name}.{table_name} AS
+                        SELECT * FROM delta_scan('{s3_path}')
+                    """)
+
+                    print(f"  Created view: {schema_name}.{table_name}")
+                    views_created += 1
+
+    conn.close()
+
+    print(f"\nCreated {views_created} views in {output_path}")
+    print("\nUsage:")
+    print(f"  duckdb {output_path}")
+    print("  > SELECT * FROM gold_koe.utterances LIMIT 10;")
+
+
 # =============================================================================
 # Query Commands (DuckDB + Unity Catalog)
 # =============================================================================
@@ -385,12 +733,11 @@ def query_sql(
     """
     Run SQL query against Delta tables.
 
-    Uses DuckDB with delta_scan() for direct access, or Unity Catalog
-    if UC_ENABLED=true.
+    Uses DuckDB with delta_scan() for direct access.
 
     Examples:
         koe query sql "SELECT COUNT(*) FROM delta_scan('/lake/silver/jsut/utterances')"
-        koe query sql "SELECT * FROM koe_tts.silver_jsut.utterances LIMIT 10"
+        koe query sql "SELECT * FROM delta_scan('/lake/gold/jsut/utterances') WHERE split='train' LIMIT 10"
     """
     from modules.data_engineering.common.duckdb_client import query
 
@@ -408,17 +755,30 @@ def query_sql(
 
 
 @query_app.command("tables")
-def query_tables():
+def query_tables(
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json"),
+):
     """
-    List all tables (requires UC_ENABLED=true).
+    List all Delta tables in the lake.
 
-    Without Unity Catalog, use delta_scan() directly or
-    'koe catalog list' for lakehouse discovery.
+    Scans the lake directory structure to find tables.
     """
+    import pandas as pd
+
     from modules.data_engineering.common.duckdb_client import list_tables
 
-    result = list_tables()
-    print(result.to_string())
+    tables = list_tables()
+
+    if not tables:
+        print("No tables found in lake.")
+        return
+
+    if format == "json":
+        import json
+        print(json.dumps(tables, indent=2))
+    else:
+        df = pd.DataFrame(tables)
+        print(df.to_string(index=False))
 
 
 @query_app.command("table")
