@@ -29,9 +29,45 @@ from typing import Optional
 
 import typer
 
+from modules.data_engineering.common.filters import (
+    SAFE_IDENT,
+    SAFE_SPARK_IDENT,
+    FilterParseError,
+    quote_ident,
+    quote_spark_ident,
+    safe_sql_string,
+    validate_ident,
+)
 from modules.data_engineering.common.paths import paths
 
 __version__ = "0.2.0"
+
+# =============================================================================
+# Catalog Helpers (shared validation)
+# =============================================================================
+
+ALLOWED_LAYERS_SET = frozenset({"bronze", "silver", "gold"})
+
+
+def _validate_catalog_args(layer: str, dataset: str, table: str) -> tuple[str, str, str]:
+    """Validate and normalise layer/dataset/table for catalog commands."""
+    layer = layer.strip().lower()
+    if layer not in ALLOWED_LAYERS_SET:
+        raise typer.BadParameter(
+            f"Invalid layer {layer!r}; must be one of {sorted(ALLOWED_LAYERS_SET)}"
+        )
+    try:
+        dataset = validate_ident(dataset, "dataset")
+        table = validate_ident(table, "table")
+    except FilterParseError as e:
+        raise typer.BadParameter(str(e)) from None
+    return layer, dataset, table
+
+
+def _safe_spark_schema(layer: str, dataset: str) -> str:
+    """Build and quote a Spark schema name like `gold_koe`."""
+    raw = f"{layer}_{dataset}"
+    return quote_spark_ident(raw)
 
 # =============================================================================
 # Dataset Discovery
@@ -487,34 +523,35 @@ def catalog_hms_register(
         koe catalog hms-register silver koe utterances --location s3a://forge/lake/silver/koe/utterances
     """
     import os
+
     from modules.data_engineering.common.spark import get_spark
+
+    layer, dataset, table = _validate_catalog_args(layer, dataset, table)
 
     spark = get_spark()
     lake_root = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
 
-    # Schema name follows medallion prefix convention: gold_koe, silver_koe
-    schema_name = f"{layer}_{dataset}"
+    schema_q = _safe_spark_schema(layer, dataset)
+    table_q = quote_spark_ident(table)
 
-    # Default location if not specified
     if location is None:
         location = f"{lake_root}/{layer}/{dataset}/{table}"
 
-    print(f"Registering {schema_name}.{table}")
+    # Escape the location string for SQL literal context
+    location_escaped = safe_sql_string(location)
+
+    print(f"Registering {schema_q}.{table_q}")
     print(f"  Location: {location}")
 
-    # Create database (schema) if not exists
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_name}")
-
-    # Register external Delta table
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_q}")
     spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table}
+        CREATE TABLE IF NOT EXISTS {schema_q}.{table_q}
         USING DELTA
-        LOCATION '{location}'
+        LOCATION {location_escaped}
     """)
 
-    # Verify
-    tables = spark.sql(f"SHOW TABLES IN {schema_name}").collect()
-    print(f"  Tables in {schema_name}: {[t.tableName for t in tables]}")
+    tables = spark.sql(f"SHOW TABLES IN {schema_q}").collect()
+    print(f"  Tables in {schema_q}: {[t.tableName for t in tables]}")
     print("Done.")
 
 
@@ -522,26 +559,29 @@ def catalog_hms_register(
 def catalog_hms_refresh(
     dataset: str = typer.Option(None, "--dataset", "-d", help="Filter to specific dataset"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be registered"),
+    strict_names: bool = typer.Option(False, "--strict-names", help="Fail on unsafe directory names (for CI)"),
 ):
     """
     Scan lake and register all Delta tables with Hive Metastore.
 
-    Walks the S3 bucket structure and registers each Delta table found.
+    Walks the lake directory structure and registers each Delta table found.
     Creates databases (schemas) as needed: gold_koe, silver_koe, bronze_koe.
+
+    Directory names that don't match [a-z][a-z0-9_]* are skipped with a warning
+    (or fail if --strict-names is set).
 
     Examples:
         koe catalog hms-refresh                    # Register all tables
         koe catalog hms-refresh --dataset koe      # Only koe dataset
         koe catalog hms-refresh --dry-run          # Preview only
+        koe catalog hms-refresh --strict-names     # Fail on unsafe names (CI)
     """
     import os
+
     from modules.data_engineering.common.spark import get_spark
-    from modules.data_engineering.common.paths import paths
 
     lake_root = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
 
-    # For now, scan local filesystem to discover tables
-    # TODO: Use boto3/mc to scan S3 directly when running against real MinIO
     layers = ["bronze", "silver", "gold"]
     tables_found = []
 
@@ -553,19 +593,38 @@ def catalog_hms_refresh(
         for dataset_dir in layer_path.iterdir():
             if not dataset_dir.is_dir():
                 continue
-
             if dataset and dataset_dir.name != dataset:
                 continue
 
+            # Validate directory name as safe identifier
+            ds_name = dataset_dir.name
+            if not SAFE_IDENT.fullmatch(ds_name):
+                msg = f"Unsafe dataset directory name: {ds_name!r}"
+                if strict_names:
+                    typer.echo(f"Error: {msg}", err=True)
+                    raise typer.Exit(1)
+                print(f"  Warning: skipping {msg}", file=sys.stderr)
+                continue
+
             for table_dir in dataset_dir.iterdir():
-                # Check if it's a Delta table (has _delta_log)
-                if (table_dir / "_delta_log").exists():
-                    tables_found.append({
-                        "layer": layer,
-                        "dataset": dataset_dir.name,
-                        "table": table_dir.name,
-                        "location": f"{lake_root}/{layer}/{dataset_dir.name}/{table_dir.name}",
-                    })
+                tbl_name = table_dir.name
+                if not (table_dir / "_delta_log").exists():
+                    continue
+
+                if not SAFE_IDENT.fullmatch(tbl_name):
+                    msg = f"Unsafe table directory name: {tbl_name!r}"
+                    if strict_names:
+                        typer.echo(f"Error: {msg}", err=True)
+                        raise typer.Exit(1)
+                    print(f"  Warning: skipping {msg}", file=sys.stderr)
+                    continue
+
+                tables_found.append({
+                    "layer": layer,
+                    "dataset": ds_name,
+                    "table": tbl_name,
+                    "location": f"{lake_root}/{layer}/{ds_name}/{tbl_name}",
+                })
 
     if not tables_found:
         print("No Delta tables found in lake.")
@@ -575,30 +634,27 @@ def catalog_hms_refresh(
 
     if dry_run:
         for t in tables_found:
-            schema_name = f"{t['layer']}_{t['dataset']}"
-            print(f"  Would register: {schema_name}.{t['table']}")
+            schema_q = _safe_spark_schema(t["layer"], t["dataset"])
+            table_q = quote_spark_ident(t["table"])
+            print(f"  Would register: {schema_q}.{table_q}")
             print(f"    Location: {t['location']}")
         print("\n(Dry run - no changes made)")
         return
 
-    # Register with HMS
     spark = get_spark()
 
     for t in tables_found:
-        schema_name = f"{t['layer']}_{t['dataset']}"
-        table_name = t["table"]
-        location = t["location"]
+        schema_q = _safe_spark_schema(t["layer"], t["dataset"])
+        table_q = quote_spark_ident(t["table"])
+        location_escaped = safe_sql_string(t["location"])
 
-        print(f"  Registering {schema_name}.{table_name}...")
+        print(f"  Registering {schema_q}.{table_q}...")
 
-        # Create database if not exists
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_name}")
-
-        # Register external Delta table
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {schema_q}")
         spark.sql(f"""
-            CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}
+            CREATE TABLE IF NOT EXISTS {schema_q}.{table_q}
             USING DELTA
-            LOCATION '{location}'
+            LOCATION {location_escaped}
         """)
 
     print(f"\nRegistered {len(tables_found)} tables with Hive Metastore.")
@@ -618,8 +674,6 @@ def catalog_hms_list():
     from modules.data_engineering.common.spark import get_spark
 
     spark = get_spark()
-
-    # List databases
     databases = spark.sql("SHOW DATABASES").collect()
 
     print("Hive Metastore Contents:\n")
@@ -627,9 +681,15 @@ def catalog_hms_list():
     for db in databases:
         db_name = db.namespace
         if db_name == "default":
-            continue  # Skip default database
+            continue
 
-        tables = spark.sql(f"SHOW TABLES IN {db_name}").collect()
+        # Validate db_name before interpolating into SQL
+        if not SAFE_SPARK_IDENT.fullmatch(db_name):
+            print(f"  Warning: skipping database with unsafe name: {db_name!r}", file=sys.stderr)
+            continue
+
+        db_q = quote_spark_ident(db_name)
+        tables = spark.sql(f"SHOW TABLES IN {db_q}").collect()
         if not tables:
             continue
 
@@ -644,41 +704,39 @@ def catalog_hms_list():
 def catalog_sync_duckdb(
     output: str = typer.Option(".forge/catalog.duckdb", "--output", "-o", help="Output DuckDB file"),
     dataset: str = typer.Option(None, "--dataset", "-d", help="Filter to specific dataset"),
+    strict_names: bool = typer.Option(False, "--strict-names", help="Fail on unsafe directory names (for CI)"),
 ):
     """
     Create DuckDB views from lake structure.
 
     Generates a DuckDB catalog file with views pointing to S3 paths.
-    Credentials are set at connection time, not stored in the file.
+    Directory names that don't match [a-z][a-z0-9_]* are skipped with a warning
+    (or fail if --strict-names is set).
 
     Examples:
         koe catalog sync-duckdb
         koe catalog sync-duckdb --output my-catalog.duckdb
         koe catalog sync-duckdb --dataset koe
+        koe catalog sync-duckdb --strict-names     # Fail on unsafe names (CI)
     """
     import os
     from pathlib import Path
 
     import duckdb
 
-    from modules.data_engineering.common.paths import paths
-
     lake_root = os.getenv("FORGE_LAKE_ROOT_S3", "s3://forge/lake")
 
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Remove existing file to start fresh
     if output_path.exists():
         output_path.unlink()
 
     conn = duckdb.connect(str(output_path))
-
-    # Load extensions (stored in the file)
+    # SECURITY: do not interpolate user values — use safe_sql_string for literals
     conn.execute("INSTALL delta; LOAD delta;")
     conn.execute("INSTALL httpfs; LOAD httpfs;")
 
-    # Scan local filesystem for tables
     layers = ["bronze", "silver", "gold"]
     views_created = 0
 
@@ -690,28 +748,50 @@ def catalog_sync_duckdb(
         for dataset_dir in layer_path.iterdir():
             if not dataset_dir.is_dir():
                 continue
-
             if dataset and dataset_dir.name != dataset:
                 continue
 
-            schema_name = f"{layer}_{dataset_dir.name}"
+            ds_name = dataset_dir.name
+            if not SAFE_IDENT.fullmatch(ds_name):
+                msg = f"Unsafe dataset directory name: {ds_name!r}"
+                if strict_names:
+                    conn.close()
+                    typer.echo(f"Error: {msg}", err=True)
+                    raise typer.Exit(1)
+                print(f"  Warning: skipping {msg}", file=sys.stderr)
+                continue
 
-            # Create schema
-            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+            # Schema name: e.g., "gold_koe" (DuckDB uses double-quotes)
+            schema_name = f"{layer}_{ds_name}"
+            schema_q = quote_ident(schema_name)
+            # SECURITY: do not interpolate user values — use build_where / safe_sql_string
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_q}")
 
             for table_dir in dataset_dir.iterdir():
-                if (table_dir / "_delta_log").exists():
-                    table_name = table_dir.name
-                    s3_path = f"{lake_root}/{layer}/{dataset_dir.name}/{table_name}"
+                if not (table_dir / "_delta_log").exists():
+                    continue
 
-                    # Create view
-                    conn.execute(f"""
-                        CREATE OR REPLACE VIEW {schema_name}.{table_name} AS
-                        SELECT * FROM delta_scan('{s3_path}')
-                    """)
+                tbl_name = table_dir.name
+                if not SAFE_IDENT.fullmatch(tbl_name):
+                    msg = f"Unsafe table directory name: {tbl_name!r}"
+                    if strict_names:
+                        conn.close()
+                        typer.echo(f"Error: {msg}", err=True)
+                        raise typer.Exit(1)
+                    print(f"  Warning: skipping {msg}", file=sys.stderr)
+                    continue
 
-                    print(f"  Created view: {schema_name}.{table_name}")
-                    views_created += 1
+                table_q = quote_ident(tbl_name)
+                s3_path = f"{lake_root}/{layer}/{ds_name}/{tbl_name}"
+                s3_escaped = safe_sql_string(s3_path)
+
+                conn.execute(f"""
+                    CREATE OR REPLACE VIEW {schema_q}.{table_q} AS
+                    SELECT * FROM delta_scan({s3_escaped})
+                """)
+
+                print(f"  Created view: {schema_q}.{table_q}")
+                views_created += 1
 
     conn.close()
 
@@ -733,23 +813,30 @@ app.add_typer(query_app, name="query")
 def query_sql(
     sql: str = typer.Argument(..., help="SQL query to execute"),
     format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, csv"),
-    limit: int = typer.Option(None, "--limit", "-n", help="Limit rows (applied if not in query)"),
+    limit: int = typer.Option(None, "--limit", "-n", help="Limit rows (pushed into SQL if no LIMIT present)"),
 ):
     """
-    Run SQL query against Delta tables.
+    Run SQL query against Delta tables (arbitrary SQL - use with care).
 
-    Uses DuckDB with delta_scan() for direct access.
+    Uses DuckDB with delta_scan() for direct access. This is an escape hatch
+    for power users who need full SQL control.
 
     Examples:
         koe query sql "SELECT COUNT(*) FROM delta_scan('/lake/silver/jsut/utterances')"
-        koe query sql "SELECT * FROM delta_scan('/lake/gold/jsut/utterances') WHERE split='train' LIMIT 10"
+        koe query sql "SELECT * FROM delta_scan('/lake/gold/jsut/utterances') WHERE split='train'" -n 10
     """
+    import re
+
     from modules.data_engineering.common.duckdb_client import query
 
-    result = query(sql)
+    # Push LIMIT into SQL if not already present (avoids materializing full result)
+    effective_sql = sql
+    if limit is not None:
+        # Check if LIMIT already in query (case-insensitive, word boundary)
+        if not re.search(r"\bLIMIT\s+\d+", sql, re.IGNORECASE):
+            effective_sql = f"{sql.rstrip().rstrip(';')} LIMIT {int(limit)}"
 
-    if limit and len(result) > limit:
-        result = result.head(limit)
+    result = query(effective_sql)
 
     if format == "json":
         print(result.to_json(orient="records", indent=2))
@@ -792,22 +879,54 @@ def query_table(
     dataset: str = typer.Argument(..., help="Dataset name"),
     table: str = typer.Argument(..., help="Table name"),
     columns: str = typer.Option("*", "--columns", "-c", help="Column selection"),
-    where: str = typer.Option(None, "--where", "-w", help="WHERE clause"),
+    filters: list[str] | None = typer.Option(
+        None,
+        "--filter", "-F",
+        help="AND filter (repeatable). Ex: -F \"split='train'\" -F \"duration_sec>=1.0\"",
+    ),
+    any_filters: list[str] | None = typer.Option(
+        None,
+        "--any-filter", "-A",
+        help="OR filter (repeatable). Ex: -A \"speaker='jvs001'\" -A \"speaker='jvs002'\"",
+    ),
     limit: int = typer.Option(10, "--limit", "-n", help="Row limit"),
     format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, csv"),
+    no_introspect: bool = typer.Option(
+        False,
+        "--no-introspect",
+        help="Skip schema introspection (faster, less validation)",
+    ),
 ):
     """
-    Query a specific table by layer/dataset/table.
+    Query a specific table by layer/dataset/table with safe filters.
+
+    Filters use parameterized queries to prevent SQL injection.
+    String values MUST be quoted: split='train' not split=train.
 
     Examples:
         koe query table silver jsut utterances
         koe query table silver jsut utterances --limit 5
-        koe query table silver jsut utterances --columns "id,text,duration_sec"
-        koe query table gold jsut utterances --where "split='train'" --limit 100
+        koe query table silver jsut utterances -c "id,text,duration_sec"
+        koe query table gold jsut utterances -F "split='train'" --limit 100
+        koe query table gold jvs utterances -F "split='train'" -A "speaker='jvs001'" -A "speaker='jvs002'"
     """
     from modules.data_engineering.common.duckdb_client import query_table as qt
+    from modules.data_engineering.common.filters import FilterParseError
 
-    result = qt(layer, dataset, table, columns=columns, where=where, limit=limit)
+    try:
+        result = qt(
+            layer,
+            dataset,
+            table,
+            columns=columns,
+            filters=filters,
+            any_filters=any_filters,
+            limit=limit,
+            introspect=not no_introspect,
+        )
+    except FilterParseError as e:
+        typer.echo(f"Filter error: {e}", err=True)
+        raise typer.Exit(1) from None
 
     if format == "json":
         print(result.to_json(orient="records", indent=2))
