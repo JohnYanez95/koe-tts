@@ -135,34 +135,41 @@ def datasets():
 @app.command()
 def bootstrap(
     project: str = typer.Option("koe-tts", "--project", "-p", help="Project name in Vault"),
-    show: bool = typer.Option(False, "--show", "-s", help="Show values (don't use in scripts)"),
+    show: bool = typer.Option(False, "--show", "-s", help="Show secrets even on TTY"),
 ):
     """
     Output environment variables for shell eval.
 
-    Pulls secrets from Vault and outputs export statements.
-    Sources config for all forge infrastructure services.
-
-    Usage:
-        eval $(koe bootstrap)           # In shell
-        source <(koe bootstrap)         # Alternative syntax
-
-    For .envrc (direnv):
+    Intended use:
         eval "$(koe bootstrap)"
+        source <(koe bootstrap)
+
+    Security notes:
+    - If stdout is a TTY, secrets are masked unless --show is set
+    - When piped (eval/source), real secrets are emitted
+    - All values are shell-escaped to prevent injection
 
     Examples:
-        koe bootstrap                   # Output exports
-        koe bootstrap --show            # Show values (for debugging)
-        koe bootstrap --project other   # Use different Vault path
+        eval "$(koe bootstrap)"              # Standard usage
+        koe bootstrap --show                 # Debug: show secrets on TTY
+        koe bootstrap --project other-proj   # Use different Vault path
     """
-    import subprocess
     import os
+    import shlex
+    import subprocess
+
+    def export(name: str, value: str) -> str:
+        """Generate safe export statement with proper shell escaping."""
+        return f"export {name}={shlex.quote(value)}"
 
     vault_addr = os.getenv("VAULT_ADDR", "http://localhost:8200")
+    exports: list[str] = []
 
-    exports = []
+    # If running interactively (TTY), mask secrets unless --show is set
+    # When piped to eval/source, stdout is not a TTY so secrets are revealed
+    reveal_secrets = show or (not sys.stdout.isatty())
 
-    # Try to get secrets from Vault
+    # Check Vault availability
     vault_available = False
     try:
         result = subprocess.run(
@@ -170,56 +177,54 @@ def bootstrap(
             capture_output=True,
             timeout=5,
         )
-        vault_available = result.returncode == 0
+        vault_available = (result.returncode == 0)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
     if vault_available:
-        # Pull MinIO credentials from Vault
-        try:
-            result = subprocess.run(
-                ["vault", "kv", "get", "-field=user", "secret/forge/minio"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                minio_user = result.stdout.strip()
-                exports.append(f"export MINIO_ROOT_USER='{minio_user}'")
+        # Use --project to determine Vault path
+        minio_path = f"secret/{project}/minio"
 
-            result = subprocess.run(
-                ["vault", "kv", "get", "-field=password", "secret/forge/minio"],
+        try:
+            r_user = subprocess.run(
+                ["vault", "kv", "get", "-address", vault_addr, "-field=user", minio_path],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            if result.returncode == 0:
-                minio_pass = result.stdout.strip()
-                if show:
-                    exports.append(f"export MINIO_ROOT_PASSWORD='{minio_pass}'")
+            if r_user.returncode == 0:
+                exports.append(export("MINIO_ROOT_USER", r_user.stdout.strip()))
+
+            r_pass = subprocess.run(
+                ["vault", "kv", "get", "-address", vault_addr, "-field=password", minio_path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r_pass.returncode == 0:
+                pw = r_pass.stdout.strip()
+                if reveal_secrets:
+                    exports.append(export("MINIO_ROOT_PASSWORD", pw))
                 else:
-                    exports.append(f"export MINIO_ROOT_PASSWORD='{minio_pass}'")
+                    exports.append("export MINIO_ROOT_PASSWORD='***'")
+
         except (subprocess.TimeoutExpired, FileNotFoundError):
             print("# Warning: Could not read MinIO secrets from Vault", file=sys.stderr)
     else:
         print("# Warning: Vault not available, using env defaults", file=sys.stderr)
 
-    # Standard infrastructure config
+    # Standard infrastructure config (all safely escaped)
     exports.extend([
-        f"export VAULT_ADDR='{vault_addr}'",
-        "export METASTORE_URI='thrift://localhost:9083'",
-        "export MINIO_ENDPOINT='http://localhost:9000'",
-        "export FORGE_LAKE_ROOT_S3A='s3a://forge/lake'",
-        "export FORGE_LAKE_ROOT_S3='s3://forge/lake'",
+        export("VAULT_ADDR", vault_addr),
+        export("METASTORE_URI", "thrift://localhost:9083"),
+        export("MINIO_ENDPOINT", "http://localhost:9000"),
+        export("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake"),
+        export("FORGE_LAKE_ROOT_S3", "s3://forge/lake"),
     ])
 
-    # Output
+    # Output to stdout (warnings already went to stderr)
     for line in exports:
-        if show:
-            print(line)
-        else:
-            # Mask passwords in non-show mode output
-            print(line)
+        print(line)
 
 
 # =============================================================================
