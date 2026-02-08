@@ -45,6 +45,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from dotenv import load_dotenv
+
+# Load .env before anything reads env vars (doesn't override existing env)
+load_dotenv()
 
 
 @dataclass
@@ -277,6 +281,9 @@ def _load_config_paths() -> tuple[Optional[Path], Optional[Path], Optional[Path]
     """
     Load DATA_ROOT, LOCAL_ROOT, and cache path from configs/lakehouse/paths.yaml.
 
+    The YAML may contain plain paths (no env var substitution needed).
+    Env vars are handled by python-dotenv + _get_roots() precedence, not YAML.
+
     Returns:
         Tuple of (data_root, local_root, cache_path), any can be None
     """
@@ -285,25 +292,9 @@ def _load_config_paths() -> tuple[Optional[Path], Optional[Path], Optional[Path]
         with open(config_path) as f:
             config = yaml.safe_load(f)
             if config:
-                data_root = None
-                local_root = None
-                cache_path = None
-
-                if "data_root" in config:
-                    root = os.path.expandvars(config["data_root"])
-                    root = os.path.expanduser(root)
-                    data_root = Path(root)
-
-                if "local_root" in config:
-                    local = os.path.expandvars(config["local_root"])
-                    local = os.path.expanduser(local)
-                    local_root = Path(local)
-
-                if "cache_root" in config:
-                    cache = os.path.expandvars(config["cache_root"])
-                    cache = os.path.expanduser(cache)
-                    cache_path = Path(cache)
-
+                data_root = Path(config["data_root"]) if config.get("data_root") else None
+                local_root = Path(config["local_root"]) if config.get("local_root") else None
+                cache_path = Path(config["cache_root"]) if config.get("cache_root") else None
                 return data_root, local_root, cache_path
     return None, None, None
 

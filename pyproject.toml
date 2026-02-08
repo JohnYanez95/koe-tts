@@ -50,6 +50,7 @@ dependencies = [
     "tqdm>=4.65.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
 
     # Unity Catalog integration
     "unitycatalog-client==0.3.1",  # Pin to match UC server version
@@ -67,8 +68,9 @@ dev = [
 
 train = [
     # Training deps - install torch/torchaudio separately with CUDA first:
-    # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
     "pytorch-lightning>=2.0.0",
+    "torchcodec>=0.10.0",  # torchaudio 2.10+ default audio backend (requires system ffmpeg)
 ]
 
 labeler = [

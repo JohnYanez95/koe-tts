@@ -12,9 +12,13 @@
 #   3. Training ends -> archive run to G:, clear local
 #
 # Override order:
-#   1. KOE_DATA_ROOT / KOE_LOCAL_ROOT environment variables (highest priority)
-#   2. This config file
+#   1. Environment variables KOE_DATA_ROOT / KOE_LOCAL_ROOT (highest priority)
+#   2. .env file in repo root (loaded by python-dotenv)
 #   3. Default: repo root (lowest priority)
+#
+# Set your paths in .env (see .env.example):
+#   KOE_DATA_ROOT=/mnt/nas/koe-tts
+#   KOE_LOCAL_ROOT=/home/user/koe-tts
 #
 # Structure under DATA_ROOT (archive):
 #   data/         # Downloaded corpus, assets, derived
@@ -29,13 +33,9 @@
 # =============================================================================
 
 # Archive storage (large, slower - NAS or external drive)
-# Override with KOE_DATA_ROOT environment variable
-data_root: ${KOE_DATA_ROOT:-.}
+# Override with KOE_DATA_ROOT environment variable or .env
+# data_root: /mnt/nas/koe-tts
 
 # Local working storage (fast SSD for active training)
-# Override with KOE_LOCAL_ROOT environment variable
-local_root: ${KOE_LOCAL_ROOT:-.}
-
-# Examples:
-#   export KOE_DATA_ROOT=/mnt/nas/koe-tts
-#   export KOE_LOCAL_ROOT=$HOME/koe-tts
+# Override with KOE_LOCAL_ROOT environment variable or .env
+# local_root: /home/user/koe-tts
