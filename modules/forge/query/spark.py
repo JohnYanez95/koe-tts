@@ -114,6 +114,11 @@ def get_spark(app_name: str = "forge") -> SparkSession:
     lake_root = _validate_lake_root(LAKE_ROOT)
     logger.debug("Forge lake root: %s", lake_root)
 
+    # Build packages list — conditionally include OpenLineage JAR
+    packages = list(PACKAGES)
+    if OPENLINEAGE_URL:
+        packages.append("io.openlineage:openlineage-spark_2.13:1.7.0")
+
     builder = (
         _SparkSession.builder
         .appName(app_name)
@@ -143,7 +148,7 @@ def get_spark(app_name: str = "forge") -> SparkSession:
         )
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         # ── Packages ─────────────────────────────────────────────
-        .config("spark.jars.packages", ",".join(PACKAGES))
+        .config("spark.jars.packages", ",".join(packages))
         # ── Performance (local dev) ──────────────────────────────
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.default.parallelism", "8")
@@ -164,8 +169,16 @@ def get_spark(app_name: str = "forge") -> SparkSession:
                 "io.openlineage.spark.agent.OpenLineageSparkListener",
             )
             .config(
+                "spark.openlineage.transport.type",
+                "http",
+            )
+            .config(
                 "spark.openlineage.transport.url",
                 OPENLINEAGE_URL,
+            )
+            .config(
+                "spark.openlineage.namespace",
+                "north_star",
             )
         )
 

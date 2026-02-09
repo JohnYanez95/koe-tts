@@ -131,3 +131,87 @@ class TestOpenLineageConfig:
         assert spark_mod.OPENLINEAGE_URL is None or isinstance(
             spark_mod.OPENLINEAGE_URL, str
         )
+
+    def test_ol_jar_included_when_enabled(self):
+        """OpenLineage JAR is added to packages when OPENLINEAGE_URL is set."""
+        import modules.forge.query.spark as spark_mod
+
+        spark_mod._spark = None
+        orig_ol_url = spark_mod.OPENLINEAGE_URL
+
+        try:
+            spark_mod.OPENLINEAGE_URL = "http://localhost:5000"
+
+            # Mock SparkSession.builder chain
+            mock_session = MagicMock()
+            mock_builder = MagicMock()
+            mock_builder.appName.return_value = mock_builder
+            mock_builder.config.return_value = mock_builder
+            mock_builder.master.return_value = mock_builder
+            mock_builder.getOrCreate.return_value = mock_session
+            mock_session.sparkContext = MagicMock()
+
+            mock_spark_module = MagicMock()
+            mock_spark_module.SparkSession.builder = mock_builder
+
+            with patch.dict(
+                "sys.modules",
+                {"pyspark": MagicMock(), "pyspark.sql": mock_spark_module},
+            ):
+                spark_mod.get_spark("test-ol")
+
+            # Find the spark.jars.packages config call
+            packages_value = None
+            for call in mock_builder.config.call_args_list:
+                args = call[0]
+                if len(args) >= 2 and args[0] == "spark.jars.packages":
+                    packages_value = args[1]
+
+            assert packages_value is not None, "spark.jars.packages not configured"
+            assert "openlineage-spark" in packages_value
+            assert "spark.openlineage.transport.type" in str(
+                mock_builder.config.call_args_list
+            )
+        finally:
+            spark_mod.OPENLINEAGE_URL = orig_ol_url
+            spark_mod._spark = None
+
+    def test_ol_jar_excluded_when_disabled(self):
+        """OpenLineage JAR is NOT in packages when OPENLINEAGE_URL is unset."""
+        import modules.forge.query.spark as spark_mod
+
+        spark_mod._spark = None
+        orig_ol_url = spark_mod.OPENLINEAGE_URL
+
+        try:
+            spark_mod.OPENLINEAGE_URL = None
+
+            mock_session = MagicMock()
+            mock_builder = MagicMock()
+            mock_builder.appName.return_value = mock_builder
+            mock_builder.config.return_value = mock_builder
+            mock_builder.master.return_value = mock_builder
+            mock_builder.getOrCreate.return_value = mock_session
+            mock_session.sparkContext = MagicMock()
+
+            mock_spark_module = MagicMock()
+            mock_spark_module.SparkSession.builder = mock_builder
+
+            with patch.dict(
+                "sys.modules",
+                {"pyspark": MagicMock(), "pyspark.sql": mock_spark_module},
+            ):
+                spark_mod.get_spark("test-no-ol")
+
+            # Find the spark.jars.packages config call
+            packages_value = None
+            for call in mock_builder.config.call_args_list:
+                args = call[0]
+                if len(args) >= 2 and args[0] == "spark.jars.packages":
+                    packages_value = args[1]
+
+            assert packages_value is not None, "spark.jars.packages not configured"
+            assert "openlineage-spark" not in packages_value
+        finally:
+            spark_mod.OPENLINEAGE_URL = orig_ol_url
+            spark_mod._spark = None
