@@ -17,6 +17,7 @@ Public API
 - ``is_path_safe(path, root)`` — check if a path resolves within root
 - ``ExtractionError`` — raised on any validation failure
 - ``ExtractionLimits`` — configurable limits dataclass
+- ``ArchiveMember`` — metadata dataclass for archive listing
 - ``SAFE_DIR_MODE`` / ``SAFE_FILE_MODE`` — recommended permissions
 
 Example
@@ -59,6 +60,18 @@ class ExtractionLimits:
     max_files: int = 100_000
     max_path_length: int = 1024
     allowed_extensions: frozenset[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveMember:
+    """Metadata for a single archive member (used by list_members)."""
+
+    name: str
+    size: int
+    is_file: bool
+    is_dir: bool
+    is_symlink: bool
+    link_target: str | None = None
 
 
 # Recommended permissions for extracted files/directories.

@@ -27,7 +27,6 @@ Outputs:
 """
 
 import shutil
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -83,11 +82,12 @@ def extract_archive(
         output_dir: Directory to extract to
         archive_checksum: Archive checksum for marker file
     """
+    from modules.forge.archive.zip import ZipHandler
+
     print(f"Extracting {archive_path.name} to {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(archive_path, "r") as zf:
-        zf.extractall(output_dir)
+    ZipHandler().extract(archive_path, output_dir)
 
     # Write marker file with checksum
     marker_file = output_dir / ".extracted"
