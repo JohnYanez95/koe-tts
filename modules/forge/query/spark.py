@@ -54,7 +54,8 @@ OPENLINEAGE_URL: str | None = os.getenv("OPENLINEAGE_URL")
 
 PACKAGES = [
     "io.delta:delta-spark_2.13:4.0.0",
-    "org.apache.hadoop:hadoop-aws:3.3.4",
+    "org.apache.hadoop:hadoop-aws:3.4.1",
+    "com.amazonaws:aws-java-sdk-bundle:1.12.720",
 ]
 
 # ── Spark session ────────────────────────────────────────────────────
@@ -117,7 +118,7 @@ def get_spark(app_name: str = "forge") -> SparkSession:
     # Build packages list — conditionally include OpenLineage JAR
     packages = list(PACKAGES)
     if OPENLINEAGE_URL:
-        packages.append("io.openlineage:openlineage-spark_2.13:1.7.0")
+        packages.append("io.openlineage:openlineage-spark_2.13:1.43.0")
 
     builder = (
         _SparkSession.builder
@@ -128,6 +129,7 @@ def get_spark(app_name: str = "forge") -> SparkSession:
         # ── Hive Metastore ───────────────────────────────────────
         .config("spark.sql.catalogImplementation", "hive")
         .config("hive.metastore.uris", METASTORE_URI)
+        .config("spark.sql.warehouse.dir", f"{lake_root}/warehouse")
         # ── Delta Lake ───────────────────────────────────────────
         .config(
             "spark.sql.extensions",
