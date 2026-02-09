@@ -62,6 +62,7 @@ lake/
 
 # But track source code model definitions
 !modules/training/models/
+!modules/forge/models/
 
 ################################################################################
 # Runs / logs / dashboards / artifacts
@@ -150,6 +151,7 @@ caches/
 **/.cache/
 **/cache_snapshot/
 **/cache_snapshots/
+!modules/forge/cache/
 
 ################################################################################
 # Notebooks / experimentation
