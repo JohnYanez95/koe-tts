@@ -22,10 +22,8 @@ Writes:
 """
 
 import json
-import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from pyspark.sql import DataFrame, SparkSession
@@ -36,7 +34,7 @@ from modules.data_engineering.common.ids import make_utterance_id, make_utteranc
 from modules.data_engineering.common.io import write_table
 from modules.data_engineering.common.paths import paths
 from modules.data_engineering.common.schemas import BRONZE_UTTERANCES_SCHEMA
-from modules.data_engineering.common.spark import get_spark
+from modules.forge.query.spark import get_spark
 
 # JVS constants
 JVS_SUBSETS = ["parallel100", "nonpara30", "whisper10", "falset10"]
@@ -78,7 +76,7 @@ def get_jvs_root() -> Path:
     return jvs_root
 
 
-def parse_lab_file(lab_path: Path) -> Optional[str]:
+def parse_lab_file(lab_path: Path) -> str | None:
     """
     Parse HTS label file to extract phoneme string.
 
@@ -394,7 +392,7 @@ def build_bronze_df(spark: SparkSession) -> DataFrame:
     # (speaker_name in meta is the original jvsXXX, speaker_name in schema is optional friendly name)
 
     # Add ingested_at timestamp
-    merged_pdf["ingested_at"] = datetime.now(timezone.utc)
+    merged_pdf["ingested_at"] = datetime.now(UTC)
 
     # Create Spark DataFrame
     print("Creating Spark DataFrame...")

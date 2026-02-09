@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from modules.data_engineering.common.paths import paths
-from modules.data_engineering.common.s3 import (
+from modules.forge.storage.s3 import (
     S3ConfigError,
     S3UploadError,
     build_raw_zone_prefix,
@@ -141,7 +141,7 @@ def upload_to_raw_zone(
                 }
 
     # Build S3 prefix
-    s3_prefix = build_raw_zone_prefix(corpus=dataset, corpus_version=version)
+    s3_prefix = build_raw_zone_prefix(corpus=dataset, corpus_version=version, domain="koe")
 
     if dry_run:
         # Use same file collection logic as real upload (symlink filter + max_files)

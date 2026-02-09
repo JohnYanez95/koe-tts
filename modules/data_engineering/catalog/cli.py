@@ -16,7 +16,6 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -27,7 +26,7 @@ def get_catalog_path() -> Path:
     return paths.lake / "_catalog" / "tables"
 
 
-def read_catalog_fast() -> Optional[pd.DataFrame]:
+def read_catalog_fast() -> pd.DataFrame | None:
     """
     Read catalog using delta-rs (no Spark startup).
 
@@ -43,7 +42,7 @@ def read_catalog_fast() -> Optional[pd.DataFrame]:
         from deltalake import DeltaTable
         dt = DeltaTable(str(catalog_path))
         return dt.to_pandas()
-    except Exception as e:
+    except Exception:
         # Fallback: catalog may be empty or corrupted
         return None
 
@@ -170,7 +169,7 @@ def catalog_describe(table_fqn: str) -> int:
     print(f"  Pipeline Version: {row.get('pipeline_version') or '-'}")
 
     # Catalog stats
-    print(f"\n  Catalog Stats:")
+    print("\n  Catalog Stats:")
     print(f"    Record Count:   {row.get('record_count') or '-'}")
     print(f"    Created:        {row.get('created_at')}")
     print(f"    Updated:        {row.get('updated_at')}")
@@ -184,7 +183,7 @@ def catalog_describe(table_fqn: str) -> int:
 
             # Get metadata
             metadata = dt.metadata()
-            print(f"\n  Live Stats (delta-rs):")
+            print("\n  Live Stats (delta-rs):")
             print(f"    Name:           {metadata.name or '-'}")
             print(f"    Description:    {metadata.description or '-'}")
             print(f"    Partitions:     {metadata.partition_columns or []}")
@@ -205,7 +204,7 @@ def catalog_describe(table_fqn: str) -> int:
             print(f"\n  Live Stats: Error reading table ({e})")
 
     if row.get("description"):
-        print(f"\n  Description:")
+        print("\n  Description:")
         print(f"    {row['description']}")
 
     print()
@@ -242,7 +241,7 @@ def catalog_refresh(table_fqn: str) -> int:
 
     # Use Spark for the actual registration (needed for schema hash)
     from modules.data_engineering.common.catalog import register_table
-    from modules.data_engineering.common.spark import get_spark
+    from modules.forge.query.spark import get_spark
 
     spark = get_spark()
     df = spark.read.format("delta").load(str(delta_path))
@@ -259,7 +258,7 @@ def catalog_refresh(table_fqn: str) -> int:
 
     print(f"  Action: {result['action']}")
     print(f"  Schema Hash: {result['schema_hash']}")
-    print(f"Done.")
+    print("Done.")
 
     return 0
 

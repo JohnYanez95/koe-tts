@@ -18,13 +18,14 @@ Usage:
 """
 
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 from delta import DeltaTable
 from pyspark.sql import DataFrame
 
+from modules.forge.query.spark import get_spark
+
 from .paths import paths
-from .spark import get_spark
 
 Layer = Literal["bronze", "silver", "gold"]
 WriteMode = Literal["overwrite", "append", "merge"]
@@ -51,8 +52,8 @@ def table_exists(layer: Layer, table_name: str) -> bool:
 def read_table(
     layer: Layer,
     table_name: str,
-    version: Optional[int] = None,
-    timestamp: Optional[str] = None,
+    version: int | None = None,
+    timestamp: str | None = None,
 ) -> DataFrame:
     """
     Read a Delta table from the lakehouse.
@@ -90,10 +91,10 @@ def write_table(
     layer: Layer,
     table_name: str,
     mode: WriteMode = "overwrite",
-    partition_by: Optional[list[str]] = None,
-    merge_key: Optional[Union[str, list[str]]] = None,
+    partition_by: list[str] | None = None,
+    merge_key: str | list[str] | None = None,
     register_catalog: bool = True,
-    pipeline_version: Optional[str] = None,
+    pipeline_version: str | None = None,
 ) -> None:
     """
     Write a DataFrame to a Delta table.
@@ -143,7 +144,7 @@ def _register_in_catalog(
     table_path: Path,
     schema,
     record_count: int,
-    pipeline_version: Optional[str] = None,
+    pipeline_version: str | None = None,
 ) -> None:
     """Register table in catalog (best-effort, silent fail)."""
     try:
@@ -171,7 +172,7 @@ def _register_in_catalog(
 def _merge_table(
     df: DataFrame,
     table_path: Path,
-    merge_key: Union[str, list[str]],
+    merge_key: str | list[str],
 ) -> None:
     """Perform a merge (upsert) operation."""
     spark = get_spark()
@@ -247,7 +248,7 @@ def vacuum_table(
 def optimize_table(
     layer: Layer,
     table_name: str,
-    z_order_by: Optional[list[str]] = None,
+    z_order_by: list[str] | None = None,
 ) -> None:
     """
     Optimize a Delta table (compaction + optional Z-ordering).

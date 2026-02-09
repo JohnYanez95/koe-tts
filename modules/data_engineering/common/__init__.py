@@ -4,6 +4,8 @@ Common utilities for data engineering.
 Provides shared helpers for paths, Spark, Delta I/O, and ID generation.
 """
 
+from modules.forge.query.spark import get_spark, stop_spark
+
 from .ids import make_audio_hash, make_speaker_id, make_utterance_id, parse_utterance_key
 from .io import (
     Layer,
@@ -17,7 +19,6 @@ from .io import (
     write_table,
 )
 from .paths import LakePaths, TrainRunPaths, get_paths, paths
-from .spark import get_spark, stop_spark
 
 __all__ = [
     # Paths

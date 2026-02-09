@@ -16,9 +16,8 @@ Writes:
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
@@ -26,7 +25,7 @@ from pyspark.sql.types import StringType
 
 from modules.data_engineering.common.io import write_table
 from modules.data_engineering.common.paths import paths
-from modules.data_engineering.common.spark import get_spark
+from modules.forge.query.spark import get_spark
 
 # Gold pipeline version
 GOLD_VERSION = "v0.1-stub"
@@ -283,7 +282,7 @@ def generate_snapshot_id(dataset: str, config_hash: str = None) -> str:
 
     Format: {dataset}-{yyyymmdd-HHMMSS}-{short_hash}
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     timestamp = now.strftime("%Y%m%d-%H%M%S")
 
     if config_hash:
@@ -377,13 +376,13 @@ def validate_gold_df(df: DataFrame) -> dict:
     null_text = df.filter(F.col("text").isNull()).count()
     if null_text > 0:
         raise ValueError(f"Found {null_text} records with null text!")
-    print(f"  Null text: 0 ✓")
+    print("  Null text: 0 ✓")
 
     # Check for null audio_relpath
     null_audio = df.filter(F.col("audio_relpath").isNull()).count()
     if null_audio > 0:
         raise ValueError(f"Found {null_audio} records with null audio_relpath!")
-    print(f"  Null audio_relpath: 0 ✓")
+    print("  Null audio_relpath: 0 ✓")
 
     # Split distribution
     split_counts = df.groupBy("split").count().orderBy("split").collect()
@@ -412,7 +411,7 @@ def validate_gold_df(df: DataFrame) -> dict:
 
 
 def build_gold_jsut(
-    snapshot_id: Optional[str] = None,
+    snapshot_id: str | None = None,
     min_duration: float = DEFAULT_MIN_DURATION,
     max_duration: float = DEFAULT_MAX_DURATION,
     val_pct: float = DEFAULT_VAL_PCT,
@@ -420,7 +419,7 @@ def build_gold_jsut(
     seed: int = DEFAULT_SEED,
     export_jsonl: bool = True,
     write_delta: bool = True,
-    manifest_out: Optional[str] = None,
+    manifest_out: str | None = None,
 ) -> dict:
     """
     Build JSUT gold table and manifest.
@@ -520,14 +519,14 @@ def build_gold_jsut(
     print(f"\nDuration filter: {min_duration}s - {max_duration}s")
     print(f"  Silver records: {build_stats['total_silver']}")
     print(f"  After filter:   {build_stats['after_filter']} (dropped {build_stats['excluded_total']})")
-    print(f"\nSplit breakdown:")
+    print("\nSplit breakdown:")
     for split_name in ["train", "val", "test"]:
         if split_name in split_dist:
             count = split_dist[split_name]
             pct = count / total * 100
             print(f"  {split_name:5}: {count:6} ({pct:5.1f}%)")
     print(f"  {'total':5}: {total:6}")
-    print(f"\nOutputs:")
+    print("\nOutputs:")
     if write_delta:
         print(f"  Delta table: {output_path}")
     if manifest_path:

@@ -26,7 +26,7 @@ from modules.data_engineering.common.io import write_table
 from modules.data_engineering.common.paths import paths
 from modules.data_engineering.common.phonemes import export_inventory_json
 from modules.data_engineering.common.schemas import SILVER_UTTERANCES_SCHEMA
-from modules.data_engineering.common.spark import get_spark
+from modules.forge.query.spark import get_spark
 
 from .common import (
     DEFAULT_SEED,
@@ -180,7 +180,7 @@ def validate_silver_df(df: DataFrame, expected_count: int) -> dict:
 
     if actual_count != expected_count:
         raise ValueError(f"Record count mismatch: expected {expected_count}, got {actual_count}")
-    print(f"  Count matches bronze: ✓")
+    print("  Count matches bronze: ✓")
 
     # Check required columns are non-null
     required_cols = [
@@ -195,19 +195,19 @@ def validate_silver_df(df: DataFrame, expected_count: int) -> dict:
 
     if null_counts:
         raise ValueError(f"Null values in required columns: {null_counts}")
-    print(f"  Required columns non-null: ✓")
+    print("  Required columns non-null: ✓")
 
     # Print QC summary
-    print(f"\n  QC Summary:")
+    print("\n  QC Summary:")
     print(f"    Trainable: {stats['trainable_count']} ({stats['trainable_count']/actual_count*100:.1f}%)")
     print(f"    Excluded:  {stats['not_trainable_count']}")
     if stats['exclude_reasons']:
-        print(f"    Exclusion reasons:")
+        print("    Exclusion reasons:")
         for reason, count in sorted(stats['exclude_reasons'].items()):
             print(f"      {reason}: {count}")
 
     # Print split distribution
-    print(f"\n  Split Distribution:")
+    print("\n  Split Distribution:")
     for split_name in ["train", "val", "test"]:
         if split_name in stats['split_distribution']:
             count = stats['split_distribution'][split_name]
@@ -215,7 +215,7 @@ def validate_silver_df(df: DataFrame, expected_count: int) -> dict:
             print(f"    {split_name}: {count} ({pct:.1f}%)")
 
     # Phoneme stats
-    print(f"\n  Phonemes:")
+    print("\n  Phonemes:")
     print(f"    Has phonemes: {stats['has_phonemes']} ({stats['has_phonemes']/actual_count*100:.1f}%)")
     print(f"    Missing: {stats['missing_phonemes']}")
 
@@ -254,7 +254,7 @@ def build_silver_jvs(
 
     # Print config
     train_pct = 1.0 - val_pct - test_pct
-    print(f"\nConfig:")
+    print("\nConfig:")
     print(f"  splits: train={train_pct:.0%} / val={val_pct:.0%} / test={test_pct:.0%}")
     print(f"  seed: {seed}")
 

@@ -21,13 +21,11 @@ Command: koe segment build jsut
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
+from datetime import UTC, datetime
 
 from modules.data_engineering.common.paths import paths
-from modules.data_engineering.common.spark import get_spark
 from modules.data_engineering.silver.segments import read_segment_breaks
+from modules.forge.query.spark import get_spark
 
 # Pipeline version for tracking
 GOLD_SEGMENTS_VERSION = "v1.0"
@@ -53,7 +51,7 @@ class SegmentInfo:
     start_ms: int
     end_ms: int
     cut_reason: str  # "breakpoint" or "hard_max"
-    cut_breakpoint_ms: Optional[int]  # the chosen breakpoint (None if hard_max)
+    cut_breakpoint_ms: int | None  # the chosen breakpoint (None if hard_max)
 
     @property
     def duration_ms(self) -> int:
@@ -199,7 +197,7 @@ def generate_segment_id(utterance_id: str, start_ms: int, end_ms: int) -> str:
 
 def generate_snapshot_id(dataset: str, config_hash: str) -> str:
     """Generate snapshot ID for segments manifest."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     return f"{dataset}-seg-{timestamp}-{config_hash[:8]}"
 
@@ -251,10 +249,10 @@ class GoldSegmentStats:
     cut_natural_end: int = 0
 
     # Distribution
-    duration_p50: Optional[int] = None
-    duration_p90: Optional[int] = None
-    segments_per_utt_p50: Optional[float] = None
-    segments_per_utt_p90: Optional[float] = None
+    duration_p50: int | None = None
+    duration_p90: int | None = None
+    segments_per_utt_p50: float | None = None
+    segments_per_utt_p90: float | None = None
 
 
 def compute_gold_stats(
@@ -328,7 +326,7 @@ def print_gold_report(dataset: str, stats: GoldSegmentStats) -> None:
 
 def read_gold_manifest_records(
     dataset: str,
-    snapshot_id: Optional[str] = None,
+    snapshot_id: str | None = None,
 ) -> tuple[list[dict], str]:
     """
     Read gold manifest records.
@@ -363,8 +361,8 @@ def read_gold_manifest_records(
 
 def build_gold_segments(
     dataset: str,
-    config: Optional[SegmentConfig] = None,
-    source_snapshot: Optional[str] = None,
+    config: SegmentConfig | None = None,
+    source_snapshot: str | None = None,
     dry_run: bool = False,
 ) -> dict:
     """
@@ -386,14 +384,14 @@ def build_gold_segments(
     print(f"Gold Segments Build - {dataset}")
     print("=" * 60)
 
-    print(f"\nConfig:")
+    print("\nConfig:")
     print(f"  min_segment_ms: {config.min_segment_ms}")
     print(f"  max_segment_ms: {config.max_segment_ms}")
     print(f"  target_segment_ms: {config.target_segment_ms}")
     print(f"  min_lead_ms: {config.min_lead_ms}")
 
     # Read silver segment breaks
-    print(f"\n[1/5] Reading silver segment breaks...")
+    print("\n[1/5] Reading silver segment breaks...")
     spark = get_spark()
     breaks_df = read_segment_breaks(dataset, spark)
     breaks_rows = breaks_df.collect()
@@ -414,7 +412,7 @@ def build_gold_segments(
         pause_params_hash = "unknown"
 
     # Read gold manifest
-    print(f"\n[2/5] Reading gold manifest...")
+    print("\n[2/5] Reading gold manifest...")
     parent_records, parent_snapshot = read_gold_manifest_records(dataset, source_snapshot)
     print(f"  Found {len(parent_records):,} parent utterances")
     print(f"  Source snapshot: {parent_snapshot}")
@@ -425,12 +423,12 @@ def build_gold_segments(
     print(f"  Segments snapshot: {snapshot_id}")
 
     # Generate segments
-    print(f"\n[3/5] Generating segments...")
+    print("\n[3/5] Generating segments...")
     segments = []
     segments_per_utterance = {}
     dropped_too_short = 0
     dropped_invalid_bounds = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for parent in parent_records:
         utterance_id = parent["utterance_id"]
@@ -528,7 +526,7 @@ def build_gold_segments(
     print(f"  Dropped (invalid bounds): {dropped_invalid_bounds}")
 
     # Validate uniqueness
-    print(f"\n[4/5] Validating uniqueness...")
+    print("\n[4/5] Validating uniqueness...")
     segment_ids = [s["segment_id"] for s in segments]
     if len(segment_ids) != len(set(segment_ids)):
         raise ValueError("Segment ID collision detected!")
@@ -545,10 +543,10 @@ def build_gold_segments(
     manifest_path = output_dir / f"{snapshot_id}.jsonl"
 
     if dry_run:
-        print(f"\n[5/5] Dry run - skipping write")
+        print("\n[5/5] Dry run - skipping write")
         print(f"  Would write to: {manifest_path}")
     else:
-        print(f"\n[5/5] Writing manifest...")
+        print("\n[5/5] Writing manifest...")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         with open(manifest_path, "w", encoding="utf-8") as f:

@@ -25,11 +25,11 @@ Usage:
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 
-from modules.data_engineering.common.filters import (
+from modules.data_engineering.common.paths import paths
+from modules.forge.sql.filters import (
     SAFE_IDENT,
     SAFE_SPARK_IDENT,
     FilterParseError,
@@ -38,9 +38,20 @@ from modules.data_engineering.common.filters import (
     safe_sql_string,
     validate_ident,
 )
-from modules.data_engineering.common.paths import paths
 
 __version__ = "0.2.0"
+
+
+# =============================================================================
+# DuckDB helper (lazy client creation)
+# =============================================================================
+
+def _get_duckdb_client():
+    """Lazy-create a DuckDB client backed by the project lake."""
+    from modules.forge.query.duckdb import create_duckdb_client
+
+    return create_duckdb_client(paths.lake)
+
 
 # =============================================================================
 # Catalog Helpers (shared validation)
@@ -129,7 +140,7 @@ app = typer.Typer(
 
 @app.callback()
 def main(
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None, "--version", "-V", callback=version_callback, is_eager=True,
         help="Show version and exit"
     ),
@@ -524,7 +535,7 @@ def catalog_hms_register(
     """
     import os
 
-    from modules.data_engineering.common.spark import get_spark
+    from modules.forge.query.spark import get_spark
 
     layer, dataset, table = _validate_catalog_args(layer, dataset, table)
 
@@ -578,7 +589,7 @@ def catalog_hms_refresh(
     """
     import os
 
-    from modules.data_engineering.common.spark import get_spark
+    from modules.forge.query.spark import get_spark
 
     lake_root = os.getenv("FORGE_LAKE_ROOT_S3A", "s3a://forge/lake")
 
@@ -671,7 +682,7 @@ def catalog_hms_list():
     Examples:
         koe catalog hms-list
     """
-    from modules.data_engineering.common.spark import get_spark
+    from modules.forge.query.spark import get_spark
 
     spark = get_spark()
     databases = spark.sql("SHOW DATABASES").collect()
@@ -827,7 +838,7 @@ def query_sql(
     """
     import re
 
-    from modules.data_engineering.common.duckdb_client import query
+    client = _get_duckdb_client()
 
     # Push LIMIT into SQL if not already present (avoids materializing full result)
     effective_sql = sql
@@ -836,7 +847,7 @@ def query_sql(
         if not re.search(r"\bLIMIT\s+\d+", sql, re.IGNORECASE):
             effective_sql = f"{sql.rstrip().rstrip(';')} LIMIT {int(limit)}"
 
-    result = query(effective_sql)
+    result = client.query_raw(effective_sql)
 
     if format == "json":
         print(result.to_json(orient="records", indent=2))
@@ -857,9 +868,8 @@ def query_tables(
     """
     import pandas as pd
 
-    from modules.data_engineering.common.duckdb_client import list_tables
-
-    tables = list_tables()
+    client = _get_duckdb_client()
+    tables = client.list_tables()
 
     if not tables:
         print("No tables found in lake.")
@@ -910,11 +920,10 @@ def query_table(
         koe query table gold jsut utterances -F "split='train'" --limit 100
         koe query table gold jvs utterances -F "split='train'" -A "speaker='jvs001'" -A "speaker='jvs002'"
     """
-    from modules.data_engineering.common.duckdb_client import query_table as qt
-    from modules.data_engineering.common.filters import FilterParseError
+    client = _get_duckdb_client()
 
     try:
-        result = qt(
+        result = client.query_table(
             layer,
             dataset,
             table,
@@ -950,9 +959,8 @@ def query_scan(
         koe query scan /lake/silver/jsut/utterances
         koe query scan ./lake/bronze/jvs/utterances --limit 5
     """
-    from modules.data_engineering.common.duckdb_client import scan_delta
-
-    result = scan_delta(path, columns=columns, limit=limit)
+    client = _get_duckdb_client()
+    result = client.scan_delta(path, columns=columns, limit=limit)
 
     if format == "json":
         print(result.to_json(orient="records", indent=2))
@@ -1174,8 +1182,8 @@ def segment_list(
     Examples:
         koe segment list jsut
     """
-    from modules.data_engineering.silver.segments import list_segment_breaks
     from modules.data_engineering.gold.segments import list_gold_segments
+    from modules.data_engineering.silver.segments import list_segment_breaks
 
     print(f"\n{'='*60}")
     print(f"Segment Inventory - {dataset}")
@@ -1306,7 +1314,8 @@ def train_baseline(
         koe train baseline jsut --max-steps 5000
     """
     from pathlib import Path
-    from modules.training.pipelines.train_baseline import train, load_config
+
+    from modules.training.pipelines.train_baseline import load_config, train
 
     # Load config
     config_path = Path(config)
@@ -1372,7 +1381,8 @@ def train_duration(
         koe train duration jsut --max-steps 5000
     """
     from pathlib import Path
-    from modules.training.pipelines.train_duration import train, load_config
+
+    from modules.training.pipelines.train_duration import load_config, train
 
     # Load config
     config_path = Path(config)
@@ -1454,7 +1464,8 @@ def train_vits(
         koe train vits jvs --stage core --batch-size 8 --lr 1e-4
     """
     from pathlib import Path
-    from modules.training.pipelines.train_vits import train, train_gan, load_config
+
+    from modules.training.pipelines.train_vits import load_config, train, train_gan
 
     # Select config based on stage if not specified
     if config is None:
@@ -1638,7 +1649,7 @@ def train_compare(
     silence_max: float = typer.Option(3.0, "--silence-max", help="Max silence% increase for gate"),
 ):
     """Compare eval metrics between two runs."""
-    from modules.training.eval import compare_and_print, CompareThresholds
+    from modules.training.eval import CompareThresholds, compare_and_print
 
     thresholds = CompareThresholds(
         mel_l1_max_increase=mel_l1_max,
@@ -2184,7 +2195,7 @@ def probe_speaker(
 
 @app.command()
 def monitor(
-    run_id: Optional[str] = typer.Argument(
+    run_id: str | None = typer.Argument(
         None,
         help="Run ID to monitor. Use --list to see available runs.",
     ),
@@ -2192,7 +2203,7 @@ def monitor(
     host: str = typer.Option("127.0.0.1", "--host", "-H", help="Server host"),
     list_runs: bool = typer.Option(False, "--list", "-l", help="List available runs"),
     latest: bool = typer.Option(False, "--latest", help="Monitor most recent run"),
-    dataset: Optional[str] = typer.Option(None, "--dataset", "-d", help="Filter by dataset"),
+    dataset: str | None = typer.Option(None, "--dataset", "-d", help="Filter by dataset"),
 ):
     """
     Start the training monitor dashboard.
@@ -2272,7 +2283,7 @@ def runs_list(
     local: bool = typer.Option(False, "--local", "-l", help="List local runs (WSL)"),
 ):
     """List training runs in local or archive storage."""
-    from modules.data_engineering.common.paths import paths, list_local_runs, list_archived_runs
+    from modules.data_engineering.common.paths import list_archived_runs, list_local_runs, paths
 
     if not archived and not local:
         # Show both
@@ -2305,7 +2316,7 @@ def runs_archive(
     keep_local: bool = typer.Option(False, "--keep", "-k", help="Keep local copy after archiving"),
 ):
     """Archive a run from local to G: drive."""
-    from modules.data_engineering.common.paths import paths, archive_run
+    from modules.data_engineering.common.paths import archive_run, paths
 
     if paths.runs == paths.runs_archive:
         print("Local and archive are same location, nothing to do")
@@ -2327,7 +2338,7 @@ def runs_clone(
     checkpoint: str = typer.Option("best.pt", "--ckpt", "-c", help="Checkpoint to clone"),
 ):
     """Clone a checkpoint from G: archive to local for training."""
-    from modules.data_engineering.common.paths import paths, clone_checkpoint_to_local
+    from modules.data_engineering.common.paths import clone_checkpoint_to_local, paths
 
     if paths.runs == paths.runs_archive:
         print("Local and archive are same location, nothing to do")
@@ -2361,7 +2372,7 @@ def runs_archive_all(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be archived"),
 ):
     """Archive all local runs to G: drive."""
-    from modules.data_engineering.common.paths import paths, list_local_runs, archive_run
+    from modules.data_engineering.common.paths import archive_run, list_local_runs, paths
 
     if paths.runs == paths.runs_archive:
         print("Local and archive are same location, nothing to do")

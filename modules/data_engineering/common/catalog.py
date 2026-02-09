@@ -11,12 +11,10 @@ Usage:
 """
 
 import hashlib
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StringType,
@@ -25,8 +23,9 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from modules.forge.query.spark import get_spark
+
 from .paths import paths
-from .spark import get_spark
 
 # Catalog table schema
 CATALOG_SCHEMA = StructType([
@@ -96,7 +95,7 @@ def parse_table_fqn(fqn: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
-def get_spec_path(layer: str, table_name: str) -> Optional[str]:
+def get_spec_path(layer: str, table_name: str) -> str | None:
     """
     Get path to schema spec markdown file.
 
@@ -144,11 +143,11 @@ def register_table(
     dataset: str,
     table_name: str,
     delta_path: Path,
-    schema: Optional[StructType] = None,
-    record_count: Optional[int] = None,
-    description: Optional[str] = None,
-    pipeline_version: Optional[str] = None,
-    spark: Optional[SparkSession] = None,
+    schema: StructType | None = None,
+    record_count: int | None = None,
+    description: str | None = None,
+    pipeline_version: str | None = None,
+    spark: SparkSession | None = None,
 ) -> dict:
     """
     Register or update a table in the catalog.
@@ -175,7 +174,7 @@ def register_table(
 
     # Build table metadata
     table_fqn = make_table_fqn(layer, dataset, table_name)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     schema_hash = compute_schema_hash(schema) if schema else None
     spec_path = get_spec_path(layer, table_name)
@@ -234,9 +233,9 @@ def register_table(
 
 
 def list_tables(
-    layer: Optional[str] = None,
-    dataset: Optional[str] = None,
-    spark: Optional[SparkSession] = None,
+    layer: str | None = None,
+    dataset: str | None = None,
+    spark: SparkSession | None = None,
 ) -> list[dict]:
     """
     List tables in the catalog.
@@ -271,8 +270,8 @@ def list_tables(
 
 def describe_table(
     table_fqn: str,
-    spark: Optional[SparkSession] = None,
-) -> Optional[dict]:
+    spark: SparkSession | None = None,
+) -> dict | None:
     """
     Get detailed metadata for a specific table.
 
@@ -319,7 +318,7 @@ def describe_table(
 
 def drop_table_entry(
     table_fqn: str,
-    spark: Optional[SparkSession] = None,
+    spark: SparkSession | None = None,
 ) -> bool:
     """
     Remove a table entry from the catalog (does not delete actual table).

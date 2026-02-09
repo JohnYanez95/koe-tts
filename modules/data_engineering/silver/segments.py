@@ -19,9 +19,8 @@ Command: koe segment auto jsut
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torchaudio
@@ -45,7 +44,7 @@ from modules.data_engineering.common.audio import (
 )
 from modules.data_engineering.common.io import write_table
 from modules.data_engineering.common.paths import paths
-from modules.data_engineering.common.spark import get_spark
+from modules.forge.query.spark import get_spark
 
 # Pipeline version for tracking
 SEGMENT_BREAKS_VERSION = "v1.0"
@@ -190,18 +189,18 @@ class SegmentBreaksStats:
     failed: int = 0
 
     # Distribution percentiles
-    pause_duration_p50: Optional[float] = None
-    pause_duration_p90: Optional[float] = None
-    breakpoints_per_utt_p50: Optional[float] = None
-    breakpoints_per_utt_p90: Optional[float] = None
-    threshold_p50: Optional[float] = None
-    threshold_p90: Optional[float] = None
-    rms_p10_p50: Optional[float] = None
-    rms_p10_p90: Optional[float] = None
+    pause_duration_p50: float | None = None
+    pause_duration_p90: float | None = None
+    breakpoints_per_utt_p50: float | None = None
+    breakpoints_per_utt_p90: float | None = None
+    threshold_p50: float | None = None
+    threshold_p90: float | None = None
+    rms_p10_p50: float | None = None
+    rms_p10_p90: float | None = None
 
     # Silence ratio (explains breakpoint counts)
-    silence_pct_p50: Optional[float] = None
-    silence_pct_p90: Optional[float] = None
+    silence_pct_p50: float | None = None
+    silence_pct_p90: float | None = None
     silence_pct_high_count: int = 0  # utterances with >20% silence
 
 
@@ -299,7 +298,7 @@ def print_distribution_report(dataset: str, stats: SegmentBreaksStats) -> None:
 # Main Pipeline
 # =============================================================================
 
-def read_gold_manifest(dataset: str, snapshot_id: Optional[str] = None) -> list[dict]:
+def read_gold_manifest(dataset: str, snapshot_id: str | None = None) -> list[dict]:
     """
     Read gold manifest for a dataset.
 
@@ -338,10 +337,10 @@ def read_gold_manifest(dataset: str, snapshot_id: Optional[str] = None) -> list[
 
 def build_segment_breaks(
     dataset: str,
-    config: Optional[PauseDetectionConfig] = None,
-    source_snapshot: Optional[str] = None,
+    config: PauseDetectionConfig | None = None,
+    source_snapshot: str | None = None,
     min_lead_ms: int = 250,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     dry_run: bool = False,
     force: bool = False,
 ) -> dict:
@@ -375,7 +374,7 @@ def build_segment_breaks(
     params_hash = config_to_hash(config)
     params_json = json.dumps(asdict(config), sort_keys=True)
 
-    print(f"\nConfig:")
+    print("\nConfig:")
     print(f"  method: {method}")
     print(f"  params_hash: {params_hash}")
     print(f"  adaptive: {config.adaptive}")
@@ -384,7 +383,7 @@ def build_segment_breaks(
     print(f"  min_pause_ms: {config.min_pause_ms}")
 
     # Read source manifest
-    print(f"\n[1/4] Reading gold manifest...")
+    print("\n[1/4] Reading gold manifest...")
     manifest = read_gold_manifest(dataset, source_snapshot)
     print(f"  Found {len(manifest):,} utterances")
 
@@ -393,10 +392,10 @@ def build_segment_breaks(
         print(f"  Limited to {limit} utterances")
 
     # Process utterances
-    print(f"\n[2/4] Processing audio files...")
+    print("\n[2/4] Processing audio files...")
     results = []
     failed = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for i, record in enumerate(manifest):
         if (i + 1) % 500 == 0 or i == 0:
@@ -443,7 +442,7 @@ def build_segment_breaks(
         print(f"  Failed: {failed}")
 
     # Compute stats
-    print(f"\n[3/4] Computing statistics...")
+    print("\n[3/4] Computing statistics...")
     stats = compute_stats_from_results(results)
     stats.failed = failed
     print_distribution_report(dataset, stats)
@@ -452,15 +451,15 @@ def build_segment_breaks(
     output_path = paths.silver / dataset / "segment_breaks"
 
     if dry_run:
-        print(f"\n[4/4] Dry run - skipping write")
+        print("\n[4/4] Dry run - skipping write")
         print(f"  Would write to: {output_path}")
     else:
-        print(f"\n[4/4] Writing Delta table...")
+        print("\n[4/4] Writing Delta table...")
         print(f"  Output: {output_path}")
 
         # Check existing
         if output_path.exists() and not force:
-            print(f"  Table exists. Use --force to overwrite.")
+            print("  Table exists. Use --force to overwrite.")
             return {
                 "status": "skipped",
                 "reason": "exists",
@@ -499,7 +498,7 @@ def build_segment_breaks(
 
 def read_segment_breaks(
     dataset: str,
-    spark: Optional[SparkSession] = None,
+    spark: SparkSession | None = None,
 ) -> DataFrame:
     """
     Read segment breaks table for a dataset.

@@ -15,9 +15,7 @@ Writes:
 """
 
 import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
+from datetime import UTC, datetime
 
 import pandas as pd
 from pyspark.sql import DataFrame, SparkSession
@@ -28,7 +26,7 @@ from modules.data_engineering.common.ids import make_utterance_id, make_utteranc
 from modules.data_engineering.common.io import write_table
 from modules.data_engineering.common.paths import paths
 from modules.data_engineering.common.schemas import BRONZE_UTTERANCES_SCHEMA
-from modules.data_engineering.common.spark import get_spark
+from modules.forge.query.spark import get_spark
 
 # JSUT constants
 JSUT_SPEAKER_ID = "spk00"
@@ -233,7 +231,7 @@ def build_bronze_df(spark: SparkSession) -> DataFrame:
     )
 
     # Add ingested_at timestamp to pandas before Spark conversion
-    merged_pdf["ingested_at"] = datetime.now(timezone.utc)
+    merged_pdf["ingested_at"] = datetime.now(UTC)
 
     # Create Spark DataFrame
     print("Creating Spark DataFrame...")
@@ -319,7 +317,7 @@ def validate_bronze_df(df: DataFrame) -> dict:
     if null_counts:
         print(f"  ERROR: Null values in required columns: {null_counts}")
         raise ValueError(f"Null values in required columns: {null_counts}")
-    print(f"  Required column nulls: 0")
+    print("  Required column nulls: 0")
 
     # Duration stats
     duration_stats = df.agg(
