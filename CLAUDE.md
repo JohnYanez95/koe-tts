@@ -88,6 +88,15 @@ modules/
 │   ├── gold/                  # Training manifests (JSONL), segments
 │   └── catalog/               # Table discovery
 │
+├── forge/                     # Infrastructure SDK (S3, Spark, Vault, MLflow, cache)
+│   ├── sql/                   # Safe SQL filter parsing (parameterized)
+│   ├── archive/               # Safe tar/zip extraction (no traversal)
+│   ├── storage/               # S3/MinIO backend (StorageBackend protocol)
+│   ├── query/                 # Spark + DuckDB session factories
+│   ├── secrets/               # HashiCorp Vault KV v2 client
+│   ├── models/                # MLflow model registry wrapper
+│   └── cache/                 # Atomic cache extraction manager
+│
 ├── training/
 │   ├── audio/                 # Mel extraction, vocoder utilities
 │   ├── dataloading/           # TTSDataset, TTSCollator, cache management
@@ -103,11 +112,13 @@ modules/
 ### Data Flow
 
 1. **Ingest**: Download corpus → `data/ingest/{dataset}/`
-2. **Bronze**: Raw files → `lake/bronze/{dataset}/` (Delta table)
-3. **Silver**: QC + phonemes → `lake/silver/{dataset}/` (Delta table)
-4. **Gold**: Training splits → `lake/gold/{dataset}/manifests/*.jsonl`
+2. **Bronze**: Raw files → `s3://forge/lake/bronze/{dataset}/` (Delta table)
+3. **Silver**: QC + phonemes → `s3://forge/lake/silver/{dataset}/` (Delta table)
+4. **Gold**: Training splits → `s3://forge/lake/gold/{dataset}/manifests/*.jsonl`
 5. **Cache**: Local copy → `data/cache/{dataset}/{snapshot}/`
 6. **Training**: Cache → model checkpoints in `runs/{run_id}/`
+
+Delta tables are stored in MinIO (S3-compatible) and registered in Hive Metastore for Spark SQL access. Local symlink `lake/` → `$KOE_DATA_ROOT/lake` still exists for backwards compat.
 
 ### Key Patterns
 
@@ -118,12 +129,18 @@ paths.gold / "jsut" / "manifests"
 paths.cache / "jsut" / "latest"
 ```
 
-**Spark + Delta**: Tables use PySpark with Delta Lake for ACID guarantees:
+**Spark + Delta (forge)**: Use the forge query layer for S3-backed Spark sessions:
 ```python
-from modules.data_engineering.common.spark import get_spark
-from modules.data_engineering.common.io import write_table
+from modules.forge.query.spark import get_spark
 spark = get_spark()
-write_table(df, layer="silver", table_name="jsut/utterances", mode="overwrite")
+df = spark.table("gold_koe.jsut_utterances")  # HMS resolves → MinIO
+```
+
+**S3 Storage**:
+```python
+from modules.forge.storage.s3 import S3StorageBackend
+storage = S3StorageBackend(bucket="forge", prefix="lake")
+storage.put("test/file.parquet", local_path)
 ```
 
 **CLI Structure**: Typer-based with sub-apps (`train_app`, `cache_app`, `segment_app`) in `scripts/cli.py`.
@@ -175,6 +192,69 @@ Training incidents are documented in `docs/postmortems/`:
 - Per-incident reports: `YYYY-MM-DD_<run_id>_<slug>.md`
 - Rolling trends: `gan_stability_log.md`
 - Incident types: `numeric_instability`, `infra_crash`, `trigger_miscalibration`
+
+## Forge Infrastructure (NAS)
+
+The lakehouse infrastructure runs on a UGREEN NAS via Docker Compose (`~/Repos/forge-infra/`). All services bind `127.0.0.1` — access from the workstation requires an SSH tunnel.
+
+**Connecting:**
+```bash
+ssh forge-nas                          # Opens tunnel (see ~/.ssh/config)
+eval "$(VAULT_ADDR=http://localhost:8200 koe bootstrap --show)"  # Load env vars from Vault
+```
+
+**Port map (all via SSH tunnel):**
+
+| Port | Service |
+|------|---------|
+| 8080 | Unity Catalog |
+| 8200 | Vault |
+| 9000 | MinIO API |
+| 9001 | MinIO Console |
+| 9083 | Hive Metastore (HMS 3.1.3) |
+| 5000 | Marquez API (OpenLineage) |
+| 5002 | MLflow |
+| 3000 | Marquez Web UI |
+
+**HMS tables (registered in Hive Metastore):**
+```
+bronze_koe.{jsut,jvs}_utterances
+silver_koe.{jsut,jvs}_utterances
+silver_koe.{jsut,jvs}_segment_breaks
+gold_koe.{jsut,jvs}_utterances
+```
+
+**Quick verification:**
+```bash
+# Service health checks
+curl http://localhost:9000/minio/health/live       # MinIO
+curl http://localhost:5002/health                   # MLflow
+curl http://localhost:5000/api/v1/namespaces        # Marquez
+curl http://localhost:8080/api/2.1/unity-catalog/catalogs  # UC
+
+# Spark DDL test
+python -c "from modules.forge.query.spark import get_spark; s = get_spark(); s.sql('SHOW DATABASES').show()"
+```
+
+**Key version pins (Spark 4.0.2 ecosystem):**
+- `hadoop-aws:3.4.1` — must match Spark's bundled `hadoop-client`
+- `aws-java-sdk-bundle:1.12.720` — peer dep for hadoop-aws 3.4.1
+- `delta-spark_2.13:4.0.0`
+- HMS 3.1.3 (custom image, NOT 4.0 — see `memory/forge-infra.md` for why)
+
+**S3 bucket layout:**
+```
+s3://forge/
+├── lake/
+│   ├── bronze/{dataset}/utterances/    # Delta tables
+│   ├── silver/{dataset}/utterances/    # Delta tables
+│   ├── gold/{dataset}/utterances/      # Delta tables
+│   ├── gold/{dataset}/manifests/       # JSONL snapshots
+│   ├── gold/{dataset}/segments/        # Segment manifests
+│   ├── warehouse/                      # Spark-managed databases
+│   └── test/                           # Smoke test artifacts
+└── mlflow/artifacts/                   # MLflow model artifacts
+```
 
 ## Infrastructure (WSL2)
 
